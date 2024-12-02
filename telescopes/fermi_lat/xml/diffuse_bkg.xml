@@ -1,0 +1,21 @@
+<?xml version="1.0" ?>
+<source_library title="source library">
+ <source name="gll_iem_v07" type="DiffuseSource">
+  <spectrum type="PowerLaw" normPar="Prefactor">
+   <parameter free="1" name="Prefactor" max="1000000.0" min="0" scale="1.0" value="1.0"/>
+   <parameter free="1" name="Index" max="10" min="0" scale="-1" value="0"/>
+   <parameter free="0" name="Scale" max="500000" min="90.0" scale="1" value="100"/>
+  </spectrum>
+  <spatialModel type="MapCubeFunction" file="/Users/omooon/miniconda3/envs/fermipy/share/fermitools/refdata/fermi/galdiffuse/gll_iem_v07.fits">
+   <parameter free="0" name="Normalization" max="1000" min="0.0" scale="1" value="1.0"/>
+  </spatialModel>
+ </source>
+ <source name="iso_P8R3_SOURCE_V3_v1" type="DiffuseSource">
+  <spectrum type="FileFunction" normPar="Normalization" apply_edisp="false" file="/Users/omooon/miniconda3/envs/fermipy/share/fermitools/refdata/fermi/galdiffuse/iso_P8R3_SOURCE_V3_v1.txt">
+   <parameter free="1" name="Normalization" max="10" min="0.01" scale="1" value="1"/>
+  </spectrum>
+  <spatialModel type="ConstantValue">
+   <parameter free="0" name="Value" max="10" min="0" scale="1" value="1.0"/>
+  </spatialModel>
+ </source>
+</source_library>

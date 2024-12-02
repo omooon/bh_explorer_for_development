@@ -1,0 +1,46 @@
+{
+    "event": {
+        "evtype": 3,
+        "zmax": 90,
+        "evclass": 128,
+        "irf_name": "P8R3_SOURCE_V3",
+        "roicut": "no",
+        "filter": "(DATA_QUAL>0)&&(LAT_CONFIG==1)"
+    },
+    "space": {
+        "unit": "deg",
+        "center": {
+            "l": 0.0,
+            "b": 0.0,
+            "ra": 266.4049882865447,
+            "dec": -28.93617776179147
+        },
+        "width": {
+            "lon": 360,
+            "lat": 180
+        },
+        "radius": 180,
+        "rotation": 0,
+        "binsz": 1,
+        "npix": {
+            "x": 360,
+            "y": 180
+        },
+        "proj": "CAR",
+        "hpx_ordering_scheme": "RING",
+        "hpx_nside": 64,
+        "hpx_order": 6
+    },
+    "energy": {
+        "unit": "MeV",
+        "emin": 100,
+        "emax": 1000000,
+        "bins_per_dec": 2,
+        "enumbins": 6
+    },
+    "time": {
+        "unit": "s",
+        "tmin": "INDEF",
+        "tmax": "INDEF"
+    }
+}
