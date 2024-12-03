@@ -39,12 +39,18 @@ class ObsSnapFermiLAT:
             missing_attributes.append("psf")
         if dataset.edisp is None:
             missing_attributes.append("edisp")
-        #if dataset.background is None:
-        #    missing_attributes.append("background")
-        #if dataset.models is None:
-        #    missing_attributes.append("models")
+        if dataset.gti is None:
+            missing_attributes.append("gti")
         if missing_attributes:
             raise ValueError(f"The following attributes are None: {', '.join(missing_attributes)}.")
+
+        invalid_attributes = []
+        if dataset.background:
+            invalid_attributes.append("background")
+        if dataset.models:
+            invalid_attributes.append("models")
+        if invalid_attributes:
+            raise ValueError(f"The following attributes cannot be included: {', '.join(invalid_attributes)}")
 
         if isinstance(dataset.counts, type(dataset.exposure)) and isinstance(dataset.counts, (WcsNDMap, HpxNDMap)):
             # dataset.counts と dataset.exposure が同じ型（WcsNDMap または HpxNDMap）で一致している場合
@@ -52,67 +58,16 @@ class ObsSnapFermiLAT:
         else:
             logger.warn(f"The input MapDataset is a mixture of {type(dataset.counts)} and {type(dataset.exposure)}.")
         
-        #dataset.background
-        #fdataset.models
-        self._mapdataset = dataset
-        
-    def regions_masking(
-        self,
-        regions=[],
-        #スペーしゃるモデルがpointsourceの場合のみ,
-    ):
-        '''
-        Parameters:
-        ----------
-        regions : list
-        
-        catalog_file : path or str
-        '''
-        pass
-        
-        
-    def add_bkg_models(
-    ):
-        """
-        Parameters:
-        ----------
-        models : modelsかmapもいける。（マップの場合はnpredが固定されることにちゅうい）
+        self._map_dataset = dataset
+    
+    @property
+    def map_dataset(self):
+        return self._map_dataset
 
-        Returns:
-            masked map: しきい値より小さいピクセルをマスクしたマップ
-        """
-        pass
-
-    def add_signal_models(
-        self,
-        signal_models = Models(),
-        on_center_coords = SkyCoord(0, 45, unit="deg", frame="galactic"),
-        on_region_radius = Angle("1 deg"),
-    ):
-        """
-        +-- Map RoI --------------+
-        |                         |
-        |        Count RoI        |
-        |      ###       ###      |
-        |    ##             ##    |
-        |   ##      * <- BH  ##   |
-        |    ##             ##    |
-        |      ###       ###      |
-        |         #######         |
-        |                         |
-        +-------------------------+
-        
-        Returns:
-            masked map: しきい値より小さいピクセルをマスクしたマップ
-        """
-        self._obs_map_dataset.models = target_models
-        
-        on_region = CircleSkyRegion(
-            center=on_center_coords,
-            radius=on_region_radius
-        )
-        on_spectrum_dataset = \
-            self._obs_map_dataset.to_spectrum_dataset(on_region)
+    # エネルギー軸を可変する関数
+    # ピクセルサイズを可変する関数
+    # 時間窓でフィルタリングして可変する関数
+    
         
     def split_galactic_plane(self, map, lat_threshold, keep_geometry=True, mask_value=np.nan):
         """
@@ -212,14 +167,14 @@ class ObsSnapFermiLAT:
         #============================#
         # Default ewindow based on the dataset if not provided
         if ewindow is None:
-            energy_edges = self._mapdataset.counts.geom.axes["energy"].edges
+            energy_edges = self._map_dataset.counts.geom.axes["energy"].edges
             ewindow = (energy_edges[0], energy_edges[-1])
             print(f"Default energy window set to: {ewindow}")
         else:
             print(f"Input energy window set to: {ewindow}")
     
         energy_min, energy_max = (u.Quantity(ewindow[0]), u.Quantity(ewindow[1]))
-        energy_edges = self._mapdataset.counts.geom.axes["energy"].edges
+        energy_edges = self._map_dataset.counts.geom.axes["energy"].edges
         idx_emin = np.where(np.isclose(energy_edges.to(u.MeV).value, energy_min.to(u.MeV).value))[0]
         idx_emax = np.where(np.isclose(energy_edges.to(u.MeV).value, energy_max.to(u.MeV).value))[0]
         if len(idx_emin) == 0 or len(idx_emax) == 0:
@@ -227,14 +182,14 @@ class ObsSnapFermiLAT:
                 f"Energy window ({energy_min}, {energy_max}) do not match any of the energy edges: {energy_edges}"
             )
         ereduced_counts = \
-            self._mapdataset.slice_by_idx({"energy": slice(int(idx_emin[0]), int(idx_emax[0]))}).counts.sum_over_axes()
+            self._map_dataset.slice_by_idx({"energy": slice(int(idx_emin[0]), int(idx_emax[0]))}).counts.sum_over_axes()
 
         #==========================#
         # カウントウィンドウに関する処理 #
         #==========================#
         # Default cwindow based on the dataset if not provided
         if cwindow is None:
-            counts_data = self._mapdataset.counts.data
+            counts_data = self._map_dataset.counts.data
             cwindow = (counts_data.min(), counts_data.max())
             print(f"Default count window set to: {cwindow}")
         else:
@@ -350,14 +305,3 @@ class ObsSnapFermiLAT:
 
         plt.tight_layout()
         plt.show()
-
-
-    def fit_map():
-        pass
-    def fit_spectrum():
-        pass
-    def get_residual_map(self, test_models_name, simlation=False):
-        """使う前にモデルの追加が必要"""
-        pass
-    def test_statistics(self, test_models_name):
-        pass
