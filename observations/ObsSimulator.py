@@ -1,22 +1,14 @@
-#!/usr/bin/env python
-import numpy as np
-from pathlib import Path, PosixPath
-import numpy.ma as ma
-import matplotlib as mpl
-import json
+from astropy.coordinates import Angle, SkyCoord
 from astropy import units as u
-from astropy.time import Time
-from gammapy.modeling.models import SkyModel
-from regions import CircleSkyRegion
+from pathlib import Path
+from gammapy.maps import MapAxis, WcsNDMap, HpxNDMap
+from gammapy.modeling.models import Models
+import matplotlib.pyplot as plt
+from mpl_toolkits.axes_grid1.inset_locator import inset_axes
+import numpy as np
+from astropy.table import QTable
 
-from logging import (
-    getLogger,
-    StreamHandler
-)
-
-from ObsSnap import ObsSnap
-
-# Logger
+from logging import getLogger, StreamHandler
 logger = getLogger(__name__)
 handler = StreamHandler()
 loglevel = 'INFO'
@@ -25,498 +17,510 @@ logger.setLevel(loglevel)
 logger.addHandler(handler)
 
 
-class ObsCampaign:
-    '''ObsCampaign stands for a project to derive a specific result
-    from a series of ObsSnap.
-    It holds information on the target objects
-    and the ObsSnap series.
-    The IRF is assumed to be different for each ObsSnap.
-    ObsCampaign can be composed of multiple observation
-    runs toward one or more celestical regions.
-    '''
+
+class ObsSnapFermiLAT:
     def __init__(
-            self,
-            obs_snaps={},
-            outdir=Path('.'),
-            reference_time=Time("2000-01-01 00:00:00")
-        ):
-        """Initialize an ObsCampaign instance.
-
+        self,
+        dataset,
+        outdir=Path('.')
+    ):
+        """
+        ObsSnapFermiLAT holds information on a short-term observation for Fermi-LAT Telescope.
+        Here "short-term" means the IRF can be considered to be constant.'
+        
         Parameters:
         ----------
-        obs_snaps : dict, default={}
-            A dictionary of ObsSnap instances to be analysed in the campaign.
-            The key must be the time starting of the ObsSnap.
+        dataset : `~ gammapy.datasets.MapDataset`
+
+        outdir : string
         """
-        self.outdir = outdir if isinstance(outdir, Path) else Path(outdir)
-        self.outdir.mkdir(parents=True, exist_ok=True)
-        self.obs_snaps = obs_snaps
-        self.reference_time = reference_time
+        missing_attributes = []
+        if dataset.counts is None:
+            missing_attributes.append("counts")
+        if dataset.exposure is None:
+            missing_attributes.append("exposure")
+        if dataset.psf is None:
+            missing_attributes.append("psf")
+        if dataset.edisp is None:
+            missing_attributes.append("edisp")
+        if dataset.background is None:
+            missing_attributes.append("background")
+        if dataset.models is None:
+            missing_attributes.append("models")
+        if missing_attributes:
+            raise ValueError(f"The following attributes are None: {', '.join(missing_attributes)}.")
 
-    def delta_times(self):
-        """Command to return the livetime duration of each observation.
-
+        if isinstance(dataset.counts, type(dataset.exposure)) and isinstance(dataset.counts, (WcsNDMap, HpxNDMap)):
+            # dataset.counts と dataset.exposure が同じ型（WcsNDMap または HpxNDMap）で一致している場合
+            print(f"The input MapDataset is based on {type(dataset.exposure)}.")
+        else:
+            logger.warn(f"The input MapDataset is a mixture of {type(dataset.counts)} and {type(dataset.exposure)}.")
+        
+        dataset.background
+        dataset.models
+        
+        self._dataset = dataset
+        
+        # 二つを合わせた辞書にして、キーを設定しておく
+        #self._on_regions = []
+        #self._on_spectrum_datasets = []
+        
+    def mask_regions_from_catalog(
+        self,
+        catalog_file,
+        #マスクする半径,
+        #スペーしゃるモデルがpointsourceの場合のみ,
+    ):
+        '''
+        Parameters:
+        ----------
+        catalog_file : path or str
+        '''
+        pass
+        
+    def add_models_from_catalog(
+        self,
+        catalog_file,
+        #モデルに入れる基準,
+        #self変数で読み込んだカタログは保持しておく？
+    ):
+        '''
+        Parameters:
+        ----------
+        catalog_file : path or str
+        '''
+        pass
+        
+    def add_bkg_models(
+    ):
+        """
         Returns:
-            np.ndarray: the livetime duration of each observation.
+            masked map: しきい値より小さいピクセルをマスクしたマップ
         """
-        delta_times = np.ndarray(shape=(len(self.obs_snaps))) * u.s
-        # delta_times = u.Quantity(
-        #     np.ndarray(shape=(len(self.obs_snaps))),
-        #     unit=u.s
-        #     )
-        for iobs, obs_snap in enumerate(self.obs_snaps.values()):
-            delta_time =\
-                (obs_snap.observation.tstop - obs_snap.observation.tstart)\
-                .to(u.s)
-            # logger.debug('delta_time: {0}'.format(delta_time))
-            delta_times[iobs] = delta_time
-        return delta_times
+        pass
 
-    def time_to_evaporation(self):
-        time_to_evaporation = np.ndarray(shape=(len(self.obs_snaps)))
-        logger.debug(self.reference_time)
-        for iobs, obs_snap in enumerate(self.obs_snaps.values()):
-            logger.debug(obs_snap.observation.tstart)
-            time_to_evaporation[iobs]\
-                = (self.reference_time - obs_snap.observation.tstart)\
-                .to_value(u.s)
-        logger.debug('Time to evaporation:\n{0}'.format(time_to_evaporation))
-        return time_to_evaporation
+    def add_signal_models(
+        self,
+        signal_models = Models(),
+        on_center_coords = SkyCoord(0, 45, unit="deg", frame="galactic"),
+        on_region_radius = Angle("1 deg"),
+    ):
+        """
+        +-- Map RoI --------------+
+        |                         |
+        |        Count RoI        |
+        |      ###       ###      |
+        |    ##             ##    |
+        |   ##      * <- BH  ##   |
+        |    ##             ##    |
+        |      ###       ###      |
+        |         #######         |
+        |                         |
+        +-------------------------+
+        
+        Returns:
+            masked map: しきい値より小さいピクセルをマスクしたマップ
+        """
+        self._obs_map_dataset.models = target_models
+        
+        on_region = CircleSkyRegion(
+            center=on_center_coords,
+            radius=on_region_radius
+        )
+        on_spectrum_dataset = \
+            self._obs_map_dataset.to_spectrum_dataset(on_region)
+        
+        self._on_regions.append(on_region)
+        self._on_spectrum_datasets.append(on_spectrum_dataset)
+        
+        
+    def run_fitting(
+        self,
+        fit_models,
+        energy_edges,
+        mode="binned",
+    ):
+        #bkg models
+        # gammapyでやるのではなく、fermitoolsでやった方がいいのでは？
+        fit = Fit()
+        result = fit.run(datasets=[dataset])
 
-    def time_to_evaporation_to_zero(self):
-        return np.append(self.time_to_evaporation(), [0])
+    def get_residual_map(self, test_models_name, simlation=False):
+        pass
 
-    def time_to_evaporation_log(self):
-        return np.log10(self.time_to_evaporation())
+    def get_test_statistics(self, test_models_name):
+        on_spectrum = self.on_spectrum_dataset.copy()
+        on_datasets = Datasets()
+        on_datasets.append(on_spectrum)
+        on_datasets.models = test_models
+        #  Check statistics
+        #  logger.info('''Cash: {0}'''.format(
+        #  cash(n_on=on_spectrum.counts,
+        #  mu_on=on_spectrum.npred()).sum()))
+        #  logger.info('stat_sum: {0}'.format(on_datasets.stat_sum()))
+        return on_datasets.stat_sum()
 
-    def time_to_evaporation_to_zero_log(self):
-        """Query to return the log10 of the time to evaporation,
-with the last value being 1/10 of the previous value
-to avoid log10(0).
+    def get_counts_map(
+        self,
+        count_type="npred"
+    ):
+        # 集めるカウント領域の設定
+        if not count_radius:
+            count_roi = self._count_roi
+        else:
+            count_roi = CircleSkyRegion(
+                                            center=self._blackhole.sky_coord(),
+                                            radius=count_radius*u.deg
+                                        )
 
-    Returns:
-        np.ndarray: the log10 of the time to evaporation.
-    """
-        time_to_evaporation = self.time_to_evaporation()
-        return np.log10(
-            np.append(time_to_evaporation, [time_to_evaporation[-1] / 10.])
-            )
-
-    def common_energy_edges(self):
-        common_energy_edges = None
-        for obs_snap in self.obs_snaps.values():
-            if common_energy_edges is None:
-                common_energy_edges =\
-                    obs_snap.energy_axis.edges
-            else:
-                common_energy_edges = np.intersect1d(
-                    common_energy_edges,
-                    obs_snap.energy_axis.edges
-                    )
-        return common_energy_edges
-
-    def common_energy_edges_TeV(self):
-        return self.common_energy_edges().to(u.TeV).value
-
-    def timeres_onoffspectra(self):
-        timeres_onoffspectra = []
-        for obs_snap in self.obs_snaps.values():
-            timeres_onoffspectra.append(
-                obs_snap.onoff_spectrum_dataset
-            )
-        return timeres_onoffspectra
-
-    def timeres_cubes(self):
-        timeres_cubes = []
-        for obs_snap in self.obs_snaps.values():
-            timeres_cubes.append(
-                obs_snap.map_dataset.counts
-            )
-        return timeres_cubes
-
-    def dump_json(self, path_jsonfile=None, overwrite=False):
-        """Writes a dictionary representation of
-        this object's non-function properties to a JSON file.
-
-         Parameters:
-         ----------
-         path_jsonfile : str
-             The path of the JSON file to write to.
-         """
-        if path_jsonfile is None:
-            path_jsonfile = self.outdir / 'obs_campaign.json'
-        data_dict = {}
-        for kmem, vmem in vars(self).items():
-            #  Custom conversions
-            if kmem == 'obs_snaps':
-                data_dict[kmem] = {}
-                for ksnap, vsnap in self.obs_snaps.items():
-                    path_obssnap = vsnap.outdir / 'obs_snap.json'
-                    vsnap.dump_json(
-                        path_jsonfile=path_obssnap,
-                        overwrite=overwrite
-                        )
-                    data_dict[kmem][ksnap] = str(path_obssnap)
-            #  Generic conversion
-            elif not callable(vmem) and not kmem.startswith("__"):
-                if isinstance(vmem, Path) or isinstance(vmem, PosixPath):
-                    data_dict[kmem] = str(vmem)
-                else:
-                    data_dict[kmem] = vmem
-
-        with open(path_jsonfile, 'w') as json_file:
-            # convert non-JSON serializable objects to string
-            json.dump(data_dict, json_file, indent=2, default=str)
-
-    def load_json(self, path_jsonfile=None):
-        """Reads a dictionary representation of
-        this object's non-function properties to a JSON file.
-
-         Parameters:
-         ----------
-         path_jsonfile : str
-             The path of the JSON file to read.
-         """
-        if path_jsonfile is None:
-            path_jsonfile = self.outdir / 'obs_campaign.json'
-
-        with open(path_jsonfile, 'r') as json_file:
-            # convert non-JSON serializable objects to string
-            data_dict = json.load(json_file)
-            for kmem, vmem in data_dict.items():
-                #  Custom conversions to JSON
-                if kmem == 'obs_snaps':
-                    obs_snaps = {}
-                    for ksnap, vsnap in vmem.items():
-                        path_obssnap = Path(vsnap)
-                        obs_snaps[ksnap] = ObsSnap()
-                        obs_snaps[ksnap].load_json(
-                            path_jsonfile=path_obssnap
+        # 各エネルギーを任意のlifetimeで足し合わせたカウント数、マップの初期化
+        if isinstance(self._map_geom, WcsGeom):
+            sig_counts = WcsNDMap.create(
+                                skydir=self._map_geom.center_skydir,
+                                frame=self._map_geom.frame,
+                                width=(self._map_geom.width[0][0].value,
+                                        self._map_geom.width[1][0].value
+                                        ),
+                                proj=self._map_geom.projection,
+                                binsz=self._map_geom.pixel_scales[0].deg,
+                                axes=[self._energy_axis],
+                                dtype=float,
                             )
-                    setattr(self, kmem, obs_snaps)
-                elif kmem == 'reference_time':
-                    setattr(self, kmem, Time(vmem))
-                #  Generic conversion
-                elif isinstance(vmem, str):
-                    path_vmem = Path(vmem)
-                    if path_vmem.exists():
-                        vmem = path_vmem
-                    setattr(self, kmem, vmem)
+            bkg_counts = sig_counts.copy()
+        elif isinstance(self._map_geom, HpxGeom):
+            pass
 
-    def max_likelihoods(self, itbin_lo=0, itbin_hi=None):
-        """Compute the maximum possible likelihood
-for each observation in the campaign.
+        if count_type == "counts":
+            self.get_map_dataset()
+        elif count_type == "npred":
+            pass
+        elif count_type == "fake":
+            pass
+            
+    def mask_low_counts(self, map, counts_threshold=10, mask_value=np.nan):
+        """
+        `counts_threshold` より小さいピクセルをマスクする関数
+        Args:
+            map (np.ndarray or Map): ピクセルのカウントが格納されたマップデータ
+            counts_threshold (float): カウントのしきい値
+
+        Returns:
+            masked map: しきい値より小さいピクセルをマスクしたマップ
+        """
+        counts = map.data
+        masked_data = np.where(counts >= counts_threshold, counts, mask_value)
+
+        # Create the counts maps for each region
+        if isinstance(map, WcsNDMap):
+            return WcsNDMap(map.geom, data=masked_data)
+        elif isinstance(map, HpxNDMap):
+            return HpxNDMap(map.geom, data=masked_data)
+        else:
+            raise ValueError("Unsupported map type. Expected WcsNDMap or HpxNDMap.")
+            
+    def split_galactic_plane(self, map, latitude_threshold=10*u.deg, keep_geometry=False, mask_value=np.nan):
+        """
+        Split a given map into galactic plane (|b| < latitude_threshold)
+        and off-plane regions (|b| >= latitude_threshold). b is defined to latitude_threshold.
 
         Parameters
         ----------
-        itbin_lo : int, optional
-            The lower index of the time bins to consider, by default 0
-        itbin_hi : int, optional
-            The upper index of the time bins to consider,
-            by default the length of
-            the obs_snaps list
+        map : `~gammapy.maps.WcsNDMap` or `~gammapy.maps.HpxNDMap`
+        
+        latitude_threshold : float, optional
+            Galactic latitude threshold in degrees to define the galactic plane.
+            Default is 10°.
+
+        keep_geometry : bool, optional
+            If True, keeps the original geometry of the dataset. If False,
+            a new geometry is created that corresponds to the split regions.
+            Default is True.
 
         Returns
         -------
-        np.ndarray
-            The maximum possible likelihood
-            for each observation in the campaign
+        result : dict
+            Dictionary containing:
+            - 'galactic_plane_counts_map': Counts map for galactic plane region.
+            - 'off_plane_counts_map': Counts map for off-plane region.
+            - 'galactic_plane_counts_data': Data array for galactic plane region.
+            - 'off_plane_counts_data': Data array for off-plane region.
         """
-        if itbin_hi is None:
-            itbin_hi = len(self.obs_snaps)
-        max_test_stats\
-            = np.zeros(shape=itbin_hi-itbin_lo)
-        for iobs, obs_snap in enumerate(
-            list(self.obs_snaps.values())[itbin_lo:itbin_hi]
-        ):
-            max_test_stats[iobs] = obs_snap.max_likelihood
-        return max_test_stats
+        # Get pixel coordinates
+        pixel_coords = map.geom.get_coord()
+        
+        # Create masks for galactic plane and off-plane regions
+        galactic_plane_mask = np.abs(pixel_coords["lat"]) < latitude_threshold.value
+        off_plane_mask = ~galactic_plane_mask
 
-    def likelihoods(self, models, itbin_lo=0, itbin_hi=None):
-        if itbin_hi is None:
-            itbin_hi = len(self.obs_snaps)
-        test_stats = np.zeros(shape=itbin_hi-itbin_lo)
-        for iobs, obs_snap in enumerate(
-            list(self.obs_snaps.values())[itbin_lo:itbin_hi]
-        ):
-            test_stats[iobs] = obs_snap.test_statistics(test_models=models)
-        return test_stats
+        # Create the counts maps for each region
+        if isinstance(map, WcsNDMap):
+            map_cls = WcsNDMap
+        elif isinstance(map, HpxNDMap):
+            map_cls = HpxNDMap
+        else:
+            raise ValueError("Unsupported map type. Expected WcsNDMap or HpxNDMap.")
 
-    def fit_spectra(self, skymodel, energy_edges):
-        '''Command to fit the spectrum of each ObsSnap in the self.obs_snaps
-with the given skymodel.'''
-        # timeres_eflux = u.Quantity(
-        #     np.zeros(shape=len(self.obs_snaps)),
-        #     unit=u.Unit('TeV / (s cm2)')
-        #     )
-        # timeres_eflux_err = u.Quantity(
-        #     np.zeros(shape=len(self.obs_snaps)),
-        #     unit=u.Unit('TeV / (s cm2)')
-        #     )
-        for obs_snap in self.obs_snaps.values():
-            obs_snap.fit_spectrum(
-                fit_models=skymodel,
-                energy_edges=energy_edges
-                )
-            # timeres_eflux[iobs], timeres_eflux_err[iobs] = \
-            #     obs_snap.reconstructed_flux_datasets[skymodel.name]\
-            #     .models[0].spectral_model.energy_flux_error(
-            #         energy_min=energy_edges[0],
-            #         energy_max=energy_edges[-1]
-            #         )
-        # return (timeres_eflux, timeres_eflux_err)
+        # Apply mask and create maps
+        if keep_geometry:
+            galactic_plane_map = map_cls(map.geom, data=np.where(galactic_plane_mask, map.data, mask_value))
+            off_plane_map = map_cls(map.geom, data=np.where(off_plane_mask, map.data, mask_value))
+        else:
+            galactic_plane_map = map_cls(map.geom.select_bands(mask=galactic_plane_mask),
+                                                       data=np.where(galactic_plane_mask, map.data, mask_value))
+            off_plane_map = map_cls(map.geom.select_bands(mask=off_plane_mask),
+                                                   data=np.where(off_plane_mask, map.data, mask_value))
 
-    def get_energy_flux_curve(self, skymodel):
-        """Query to get the reconstructed energy flux curve for the given sky model.
+        return {"map": galactic_plane_map, "mask": galactic_plane_mask}, {"map": off_plane_map, "mask": off_plane_mask}
 
+    def extract_pixel_info_as_qtable(self, map):
+        """
+        Extract pixel-wise information from a map and return it as an Astropy QTable.
+        
         Parameters
         ----------
-        skymodel : `~gammapy.modeling.models.SkyModel`
-            The sky model to get the reconstructed energy flux curve for.
+        map : `~gammapy.maps.Map`
+            The input map object (WcsNDMap or HpxNDMap).
+        
+        Returns
+        -------
+        qtable : `~astropy.table.QTable`
+            A QTable containing pixel-wise information: coordinates, energy (if available), and data values.
+        """
+        # Get pixel center coordinates
+        pixel_coords = map.geom.get_coord()
+
+        # Extract basic coordinate information
+        lon = pixel_coords["lon"][0] * u.deg
+        lat = pixel_coords["lat"][0] * u.deg
+        data = {"lon": lon, "lat": lat}
+        
+        # Extract non-spatial axes information
+        non_spatial_axes_name = map.geom.axes.names
+        for axis_name in non_spatial_axes_name:
+            for idx in range(map.geom.axes[axis_name].nbin):
+                table_name = f"counts_{axis_name}{map.geom.axes[axis_name].edges[idx].value:.0e}_{map.geom.axes[axis_name].edges[idx+1].value:.0e}{str(map.geom.axes[axis_name].unit)}"
+                data[table_name] = map.data[idx]
+        
+        return QTable(data)
+
+    def evaluate_counts_distribution(
+        self,
+        counts_type="counts",
+        nfakes=0,
+        energy_window=("1 GeV", "1 TeV"),
+        time_range=None,
+        space_window=(),
+        counts_threshold=0,
+        latitude_threshold=10*u.deg,
+        show_dist="counts"
+    ):
+        """
+        Parameters
+        ----------
+        nfakes : int
+            カウント分布の評価方法の指定
+            - `-1` : モデル予測値 (`npred`) に基づく分布を評価
+            - `0` : 実測データ (`real data`) を使用して分布を評価
+            - `1以上` : 指定した数だけ疑似データ (`fake counts`) を生成し、それに基づく分布を評価
+            デフォルト値は `0`
+            
+        energy_window : tuple of str or tuple of
+            エネルギー範囲 (例: ("1 GeV", "10 GeV"))。astropy単位付き。
+
+        show : bool
+            `True` の場合、結果を可視化するためにプロットを表示
+            デフォルト値は `False`
 
         Returns
         -------
-        tuple
-            A tuple containing the reconstructed energy flux curve and its error.
-            The units are astropy quantities with the unit 'TeV/(s cm2)'.
+        各ピクセルごとに集めたカウントマップデータのテーブル
+        ピクセルの座標も一緒に記録しておきたい
         """
-        ENERGY_FLUX_UNIT = u.Unit('TeV / (s cm2)')
-        timeres_eflux = u.Quantity(
-            np.zeros(shape=len(self.obs_snaps)),
-            unit=ENERGY_FLUX_UNIT
+        energy_min, energy_max = (u.Quantity(energy_window[0]), u.Quantity(energy_window[1]))
+        energy_edges = self._map_dataset.counts.geom.axes["energy"].edges
+        idx_emin = np.where(np.isclose(energy_edges.to(u.MeV).value, energy_min.to(u.MeV).value))[0]
+        idx_emax = np.where(np.isclose(energy_edges.to(u.MeV).value, energy_max.to(u.MeV).value))[0]
+        if len(idx_emin) == 0 or len(idx_emax) == 0:
+            raise ValueError(
+                f"Energy window ({energy_min}, {energy_max}) do not match any of the energy edges: {energy_edges}"
             )
-        timeres_eflux_err = u.Quantity(
-            np.zeros(shape=len(self.obs_snaps)),
-            unit=ENERGY_FLUX_UNIT
-            )
-        for iobs, obs_snap in enumerate(self.obs_snaps.values()):
-            reco_eflux\
-                = obs_snap.reconstructed_flux[skymodel.name]['energy_flux']
-            timeres_eflux[iobs]\
-                = (reco_eflux['value'] * u.Unit(reco_eflux['unit']))\
-                .to(ENERGY_FLUX_UNIT)
-            timeres_eflux_err[iobs]\
-                = (reco_eflux['error'] * u.Unit(reco_eflux['unit']))\
-                .to(ENERGY_FLUX_UNIT)
+            
+        reduced_dataset = \
+            self._map_dataset.slice_by_idx({"energy": slice(int(idx_emin[0]), int(idx_emax[0]))})
 
-        return (timeres_eflux, timeres_eflux_err)
+        if nfakes==0:
+            counts_map = reduced_dataset.counts.sum_over_axes()
+            counts_map = self.mask_low_counts(
+                            counts_map,
+                            counts_threshold=counts_threshold,
+                            mask_value=np.nan
+                        )
+            counts_data = counts_map.data.flatten()
 
-    # def get_spectra(self, skymodel, energy_edges):
-    #     '''Fit the spectrum of each ObsSnap in the self.obs_snaps
-    #     with the given skymodel.
-    #     Returns a tuple of the energy flux spectrum and its error values
-    #     against the given energy_edges.'''
-    #     timeres_eflux = u.Quantity(
-    #         np.zeros(shape=len(self.obs_snaps)),
-    #         unit=u.Unit('TeV / (s cm2)')
-    #         )
-    #     timeres_eflux_err = u.Quantity(
-    #         np.zeros(shape=len(self.obs_snaps)),
-    #         unit=u.Unit('TeV / (s cm2)')
-    #         )
-    #     for iobs, obs_snap in enumerate(self.obs_snaps.values()):
-    #         # logger.debug(obs_snap.reconstructed_flux_datasets[skymodel.name])
-    #         # logger.debug(obs_snap.reconstructed_flux_datasets[skymodel.name].data)
-    #         # timeres_eflux[iobs] = \
-    #         #     obs_snap.reconstructed_flux_datasets[skymodel.name]\
-    #         #     .data.eflux
-    #         # timeres_eflux_err[iobs] = \
-    #         #     obs_snap.reconstructed_flux_datasets[skymodel.name]\
-    #         #     .data.eflux_err
-    #         timeres_eflux[iobs], timeres_eflux_err[iobs] = \
-    #             obs_snap.reconstructed_flux_datasets[skymodel.name]\
-    #             .data.model.spectral_model.energy_flux_error(
-    #                 energy_min=energy_edges[0],
-    #                 energy_max=energy_edges[-1]
-    #                 )
-    #     return (timeres_eflux, timeres_eflux_err)
+            # 銀河面の領域 (|b| < 10°) と銀河面以外の領域 (|b| > 10°) を抽出
+            galactic_plane, off_plane = self.split_galactic_plane(
+                                            counts_map,
+                                            latitude_threshold=latitude_threshold,
+                                            keep_geometry=True,
+                                            mask_value=np.nan
+                                        )
+            
+            galactic_plane_counts_map = galactic_plane["map"]
+            #Warning: mask_valueがnp.nanだとどっちでもいいけど、0にすると、上じゃないと0countsのエントリー数が増える
+            #galactic_plane_counts_data = galactic_plane["map"].data[galactic_plane["mask"]].flatten()
+            galactic_plane["map"].data.flatten()
 
-    def livetime_integrate_onspectra(self, itbin_lo=0, itbin_hi=None):
-        if itbin_hi is None:
-            itbin_hi = len(self.obs_snaps)
-        timeintg_onspectrum =\
-            list(self.obs_snaps.values())[itbin_lo].on_spectrum_dataset.copy()
-        #  For process acceleration
-        timeintg_onspectrum_stack = timeintg_onspectrum.stack
-        for iobs, obs_snap in enumerate(
-            list(self.obs_snaps.values())[itbin_lo:itbin_hi]
-        ):
-            if iobs > 0:
-                timeintg_onspectrum_stack(obs_snap.on_spectrum_dataset)
-        return timeintg_onspectrum
+            off_plane_counts_map = off_plane["map"]
+            #off_plane_counts_data = off_plane["map"].data[off_plane["mask"]].flatten()
+            off_plane["map"].data.flatten()
 
-    def livetime_average_fluxspectra(self, skymodel, energy_edges,
-                                     itbin_lo=0, itbin_hi=None):
-        if itbin_hi is None:
-            itbin_hi = len(self.obs_snaps)
-
-        weighted_flux_sum = u.Quantity(
-            np.zeros(len(energy_edges)-1),
-            unit=u.Unit("cm-2 s-1 TeV-1")*u.s
-            )
-        # exposure_sum = np.zeros_like(energy_edges\\)
-        livetime_sum = 0*u.s
-        for iobs, obs_snap in enumerate(
-            list(self.obs_snaps.values())[itbin_lo:itbin_hi]
-        ):
-            reco_fluxes = np.squeeze(
-                obs_snap.reconstructed_flux_datasets[skymodel.name]
-                .data.dnde.quantity
+            counts_qtable = self.extract_pixel_info_as_qtable(counts_map)
+            galactic_plane_counts_qtable = self.extract_pixel_info_as_qtable(galactic_plane_counts_map)
+            off_plane_counts_qtable = self.extract_pixel_info_as_qtable(off_plane_counts_map)
+            
+            show_suptitle = f"Real MapDataset\n" \
+                            f"(nside: {reduced_dataset.counts.geom.nside[0]}," \
+                            f" energy: {round(reduced_dataset.counts.geom.axes['energy'].edges[0].to(u.GeV).value)} - " \
+                            f"{round(reduced_dataset.counts.geom.axes['energy'].edges[-1].to(u.GeV).value)} GeV," \
+                            f" time: {round(reduced_dataset.gti.met_stop[-1].value - reduced_dataset.gti.met_start[0].value)} sec)"
+            
+        elif nfakes>=1:
+            counts_data_list = []
+            galactic_plane_counts_data_list = []
+            off_plane_counts_data_list = []
+            
+            counts_qtables = []
+            galactic_plane_counts_qtables = []
+            off_plane_counts_qtables = []
+            
+            for i in range(nfakes):
+                # create fake counts
+                reduced_dataset.fake()
+                
+                counts_map = reduced_dataset.counts.sum_over_axes()
+                counts_map = self.mask_low_counts(
+                                counts_map,
+                                counts_threshold=counts_threshold,
+                                mask_value=np.nan
+                            )
+                counts_data_list.append(
+                    counts_map.data.flatten()
                 )
-            masked_reco_fluxes = ma.masked_array(
-                reco_fluxes,
-                mask=~(reco_fluxes > 0),
-                fill_value=0*u.Unit("cm-2 s-1 TeV-1")
+
+                # 銀河面の領域 (|b| < 10°) と銀河面以外の領域 (|b| > 10°) を抽出
+                galactic_plane, off_plane = self.split_galactic_plane(
+                                                counts_map,
+                                                latitude_threshold=latitude_threshold,
+                                                keep_geometry=True,
+                                                mask_value=np.nan
+                                            )
+                
+                galactic_plane_counts_map = galactic_plane["map"]
+                galactic_plane_counts_data_list.append(
+                    #galactic_plane["map"].data[galactic_plane["mask"]].flatten()
+                    galactic_plane["map"].data.flatten()
                 )
-            weighted_flux_sum +=\
-                obs_snap.observation.observation_live_time_duration *\
-                masked_reco_fluxes.filled(
-                    fill_value=0*u.Unit("cm-2 s-1 TeV-1")
-                    )
-            # exposure_sum += obs_snap.exposure
-            livetime_sum += obs_snap.observation.observation_live_time_duration
-
-        logger.debug("Livetime: {0}".format(livetime_sum))
-        logger.debug("Weighted flux: {0}".format(weighted_flux_sum))
-        return weighted_flux_sum / livetime_sum
-
-    def draw_fluxspectra(self,
-                         ax: mpl.axes,
-                         skymodel: SkyModel,
-                         energy_edges,
-                         colors,
-                         itbin_lo=0,
-                         itbin_hi=None,
-                         title='Time-resolved spectrum',
-                         reference_label='Average model'
-                         ):
-        """This method is used to draw the flux spectra for the given sky model
-        from the `gammapy.modeling.models` module.
-        It uses matplotlib to plot the reconstructed flux datasets of
-        the sky model over certain energy edges defined
-        by astropy units of measure.
-        Each flux data point is depicted with unique colors
-        representing different segments of time resolved data.
-
-        Parameters:
-        ----------
-        ax: matplotlib.axes._subplots.AxesSubplot
-            The axes upon which the data will be plotted.
-        skymodel: gammapy.modeling.models.SkyModel
-            The sky model whose reconstructed flux datasets will be plotted.
-        energy_edges: astropy Quantity array_like
-            The astropy Quantity array describing the energy bin edges over
-            which the fluxes will be plotted.
-        colors: array_like
-            The colors to use for each ObsSnap in the scatter plot.
-        itbin_lo: int, default=0
-            The lower time bin index to limit a set of ObsSnaps to be plotted.
-        itbin_hi: int, default=None
-            The upper time bin index to limit a set of ObsSnaps to be plotted.
-            If None, the length of obs_snaps will be used.
-        title: str, default='Time-resolved spectrum'
-            The title for the graph.
-
-        Returns:
-        -------
-        None: just updates the provided axes parameter with a new scatter plot.
-        """
-
-        if itbin_hi is None:
-            itbin_hi = len(self.obs_snaps)
-        FLUX_UNIT = u.Unit("TeV / (s cm2)")
-        flux_min = 1
-        flux_max = 1e-30
-        for iobs, obs_snap in enumerate(
-            list(self.obs_snaps.values())[itbin_lo:itbin_hi]
-        ):
-            # Get the reconstructed flux from ObsSnap
-            reco_fluxes = np.squeeze(
-                obs_snap.reconstructed_flux_datasets[skymodel.name]
-                .data.e2dnde.quantity
+                
+                off_plane_counts_map = off_plane["map"]
+                off_plane_counts_data_list.append(
+                    #off_plane["map"].data[off_plane["mask"]].flatten()
+                    off_plane["map"].data.flatten()
                 )
-            reco_flux_errs = np.squeeze(
-                obs_snap.reconstructed_flux_datasets[skymodel.name]
-                .data.e2dnde_err.quantity
-                )
-            logger.debug('reconstructed flux: %s', repr(reco_fluxes))
-            logger.debug('reconstructed flux error: %s', repr(reco_flux_errs))
+    
+                counts_qtables.append( self.extract_pixel_info_as_qtable(counts_map) )
+                galactic_plane_counts_qtables.append( self.extract_pixel_info_as_qtable(galactic_plane_counts_map) )
+                off_plane_counts_qtables.append( self.extract_pixel_info_as_qtable(off_plane_counts_map) )
 
-            masked_reco_fluxes = ma.masked_array(
-                reco_fluxes.to_value(FLUX_UNIT),
-                mask=~((reco_fluxes > 0 * FLUX_UNIT) &
-                       (reco_fluxes > reco_flux_errs))
-                )
-            masked_reco_flux_errs = ma.masked_array(
-                reco_flux_errs.to_value(FLUX_UNIT),
-                mask=~(reco_flux_errs > 0*FLUX_UNIT)
-                )
-            logger.debug('Masked reconstructed flux: %s',
-                         repr(masked_reco_fluxes))
-            logger.debug('Masked reconstructed flux error: %s',
-                         repr(masked_reco_flux_errs))
-            energy_refs = np.sqrt(energy_edges[:-1]*energy_edges[1:])
-            logger.debug('reference energy: %s', repr(energy_refs))
-            if (not all(masked_reco_fluxes.mask)) and \
-               (not all(masked_reco_flux_errs.mask)):
-                ax.errorbar(
-                    x=energy_refs,
-                    y=masked_reco_fluxes,
-                    xerr=(energy_refs-energy_edges[:-1],
-                          energy_edges[1:]-energy_refs),
-                    yerr=masked_reco_flux_errs,
-                    fmt='o',
-                    lw=1,
-                    color=colors[iobs],
-                    alpha=0.5,
-                    capsize=2,
-                    ms=3
-                    )
-                # Find appropriate minimum and maximum flux values to plot
-                flux_min = min(
-                    flux_min,
-                    np.min(masked_reco_fluxes-masked_reco_flux_errs)
-                    )
-                flux_max = max(
-                    flux_max,
-                    np.max(masked_reco_fluxes+masked_reco_flux_errs)
-                    )
-        # Draw the reference model
-        skymodel.spectral_model.plot(
-            energy_bounds=(energy_edges[0], energy_edges[-1]),
-            ax=ax,
-            sed_type='e2dnde',
-            color='gray',
-            label=reference_label
-            )
-        logger.debug('Y-range: {0}-{1}'.format(flux_min, flux_max))
-        ax.set_ylim(flux_min, flux_max)
-        ax.set_xscale('log')
-        ax.set_yscale('log')
-        ax.set_title(title)
-        ax.set_xlabel("Energy [TeV]")
-        ax.set_ylabel(FLUX_UNIT.to_string())
-        ax.legend()
+            # list 内の全てのデータを1つに結合
+            counts_data= np.concatenate([counts for counts in counts_data_list])
+            galactic_plane_counts_data= np.concatenate([counts for counts in galactic_plane_counts_data_list])
+            off_plane_counts_data= np.concatenate([counts for counts in off_plane_counts_data_list])
+            
+            show_suptitle = f"{nfakes} Fake MapDataset\n" \
+                            f"(nside: {reduced_dataset.counts.geom.nside[0]}," \
+                            f" energy: {round(reduced_dataset.counts.geom.axes['energy'].edges[0].to(u.GeV).value)} - " \
+                            f"{round(reduced_dataset.counts.geom.axes['energy'].edges[-1].to(u.GeV).value)} GeV," \
+                            f" time: {round(reduced_dataset.gti.met_stop[-1].value - reduced_dataset.gti.met_start[0].value)} sec)"
+            show_tile = f"Total Pixels : {(np.size(reduced_dataset.counts.data) * nfakes):,}"
 
-    def list_obs_snaps(self):
-        """Returns a list of ObsSnap objects.
+          
+        if show_dist == "counts":
+            fig = plt.figure(figsize=(15, 5))
+            fig.suptitle(show_suptitle, fontsize=16)
+            plot_hists = [
+                {"data": counts_data, "color": "black", "log": True},
+                {"data": galactic_plane_counts_data, "color": "black", "log": True},
+                {"data": off_plane_counts_data, "color": "black", "log": True},
+            ]
+            inset_maps = [
+                {"data": counts_map, "title": "All Sky Region", "stretch": "log"},
+                {"data": galactic_plane_counts_map, "title": "Galactic Plane Region", "stretch": "log"},
+                {"data": off_plane_counts_map, "title": "Off Plane Region", "stretch": "log"},
+            ]
+            
+            for i, (plot, inset) in enumerate(zip(plot_hists, inset_maps)):
+                ax = plt.subplot(1, 3, i+1)
+                min_bin = np.floor(np.nanmin(plot["data"]))  # 最小値を切り下げ
+                max_bin = np.ceil(np.nanmax(plot["data"]))  # 最大値を切り上げ
+                bin_edges = np.arange(min_bin, max_bin + 1)
+                ax.hist(plot["data"], bins=bin_edges, histtype="step", color=plot["color"], log=plot["log"])
+                ax.set_xlabel("Counts per Pixel")
+                ax.set_ylabel("Number of Pixels")
+                ax.grid(True)
+                
+                ax_inset = inset_axes(ax, width="50%", height="50%", loc="upper right")
+                inset["data"].plot(ax=ax_inset, stretch=inset["stretch"])
+                ax_inset.set_xticks([])
+                ax_inset.set_yticks([])
+                ax_inset.set_title(inset["title"])
+            plt.show()
+        
+        elif show_dist == "pixels":
+            return counts_map
+            '''
+            fig, ax = plt.subplots(figsize=(8, 6))
+            
+            for qtable in off_plane_counts_qtables:
+                non_nan_indices = ~np.isnan(qtable[qtable.colnames[2]])
+                # NaNではない行に対応する 'lon' と 'lat' の値を取得
+                lon = qtable['lon'][non_nan_indices].value
+                lon = np.where(lon > 180, lon - 360, lon)
+                lat = qtable['lat'][non_nan_indices].value
+                ax.scatter(lon, lat, color='red', s=30)
+    
+            ax.set_xlim(-180, 180)
+            ax.set_ylim(-90, 90)
+            ax.set_xlabel('Galactic Longitude (deg)')
+            ax.set_ylabel('Galactic Latitude (deg)')
+            ax.set_title('Locations on the Celestial Sphere')
+            ax.grid(True)
+            plt.show()
+            '''
+    def evaluate_5sigma_events(self):
+        #TODO: FARの計算、各ピクセルごとにヒストグラムの結果に対して何σのイベントだったかを計算、各ピクセルのカウント数を計算
+        #二つのconditionを通過したピクセルを調べる。
+        pass
+    
+    def evaluate_sn_ratio(self, show=False):
+        for t_to_evap in self._times_to_evap[tmin_idx:tmax_idx]:
+            t_to_evap_str = '{0:0=11}ms'.format(int(t_to_evap*1000))
+            if count_type == 'counts':
+                path_to_sig_filename = f"{self.RESULT_DIR}/simulation/{t_to_evap_str}/sig_count_map.fits.gz"
+                path_to_bkg_filename = f"{self.RESULT_DIR}/simulation/{t_to_evap_str}/bkg_count_map.fits.gz"
+            elif count_type == 'npred':
+                path_to_sig_filename = f"{self.RESULT_DIR}/simulation/{t_to_evap_str}/sig_npred_map.fits.gz"
+                path_to_bkg_filename = f"{self.RESULT_DIR}/simulation/{t_to_evap_str}/bkg_npred_map.fits.gz"
+            sig_count_map += self.load_map(path_to_sig_filename).interp_to_geom(geom)
+            bkg_count_map += self.load_map(path_to_bkg_filename).interp_to_geom(geom)
 
-        Returns:
-        -------
-        obs_snaps: list
-            A list of ObsSnap objects.
-        """
-        return list(self.obs_snaps.values())
 
-    def on_regions(self):
-        """Returns a list of on regions for each observation.
+        # 各エネルギーを任意のlifetimeで足し合わせたカウント数
+        diff_energy_sig_counts = sig_count_map.to_region_nd_map(region=count_roi).data[:,0,0]
+        diff_energy_bkg_counts = bkg_count_map.to_region_nd_map(region=count_roi).data[:,0,0]
 
-        Returns:
-        -------
-        on_regions: list
-            A list of on regions for each observation.
-        """
-        on_regions = []
-        for obs_snap in self.obs_snaps.values():
-            on_regions.append(obs_snap.oncount_geom.region)
-        return on_regions
+        int_hienergy_sig_counts = np.flip(np.cumsum(np.flip(diff_energy_sig_counts)))
+        int_hienergy_bkg_counts = np.flip(np.cumsum(np.flip(diff_energy_bkg_counts)))
+        
+        diff_eSN = diff_energy_sig_counts / np.sqrt(diff_energy_bkg_counts)
+        int_hi_esn = int_hienergy_sig_counts / np.sqrt(int_hienergy_bkg_counts)
+        #return photon_count_table
