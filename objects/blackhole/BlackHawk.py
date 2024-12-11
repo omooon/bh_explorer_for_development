@@ -1,31 +1,5 @@
 #!/usr/bin/env python3
 
-"""
-== 元のプログラムである bh-simulator/python/BlackHawk.py を参考に編集したプログラム ==
-
-History
--------
-    2024-10-25:
-    ・ bh-simulator/python/BlackHawk.py から pbh-analyzer/hawking/BlackHawk.py に移行 
-    ・ bh-simulator/python/utils.py から pbh-analyzer/utils/path_checker.py への移行及び変更に伴うインポート方法の変更
-    ・ bh-simulator/python/Particle.py から pbh-analyzer/hawking/Particle.py の移行
-        と importy sys を消したことによるインポート方法の変更 (from Particle から from .Particle にした)
-    
-    ・ 若干の配置やコメントアウトの変更・追加
-    ・ read_result_dts, read_result_life_evolutions, read_result_particle, time_integrate_spectra はこのクラス内でしかアクセスしないため、
-        変数名の先頭にアンダーバーを追加
-
-    ・ parameter_pathで指定されたparameters.txtファイル内の任意の値をupdateするための関数である update_parameter_file_value を追加
-    ・ plot_mass_function, plot_fixed_time_spectrum, plot_fixed_energy_spectrum を追加
-
-    2024-10-26:
-
-
-
-    secondaryが実際にはtotalなので、totalに変更してtotalとprimaryから新たにsecondaryを作成
-    このスクリプトが対応しているバージョン以外のblackhawkの場合にはwarningを出す。もしかしたら今後のバージョンではここが変更されるかもしれないから
-"""
-
 import os
 import sys
 import numpy as np
@@ -37,10 +11,8 @@ from pathlib import Path
 from astropy import constants as c
 from astropy.table import QTable, Column
 from astropy import units as u
-
-current_dir = os.path.dirname(__file__) # 現在のファイルのディレクトリ
-sys.path.append(os.path.abspath(os.path.join(current_dir, '..')))   # 親ディレクトリをsys.pathに追加
-from pbh_explorer.utils.path_checker import confirm_directory_path, confirm_file_path
+from collections import defaultdict
+from pbh_explorer.utils.PathChecker import confirm_directory_path, confirm_file_path
 
 # Logger
 from logging import getLogger, StreamHandler
@@ -50,13 +22,6 @@ loglevel = 'INFO'
 handler.setLevel(loglevel)
 logger.setLevel(loglevel)
 logger.addHandler(handler)
-
-
-#from hawking.Particle import Particle, ParticleDistribution
-#PHOTON = Particle.Particle(
-#    "photon",
-#    decay_functions={}, rest_mass=0, charge=0, flavour=None, spin=1, ndof=2
-#)
 
 class BlackHawk:
     def __init__(
@@ -96,34 +61,31 @@ class BlackHawk:
         
         self.EXE_TOT_PATH = self.TOP_PATH / 'BlackHawk_tot.x'
         self.EXE_INST_PATH = self.TOP_PATH / 'BlackHawk_inst.x' # NOTE: 現在は BlackHawk_inst.x の実行には対応していない
-
-    @property
-    def parameters(self):
-        return self._parameters
     
     @property
-    def times_evolution_table(self):
+    def time_evolution_params(self):
         '''Dictionary containing properties related to evaporation.'''
-        temperature_Kelvin = ( (c.hbar * c.c**3) / (8 * np.pi * c.G * self._life_evolutions['M'].to(u.kg) * c.k_B) )
-        temperature_GeV = (temperature_Kelvin * c.k_B).to(u.GeV)  # conversion from Kelvin to GeV
+        #temperature_Kelvin = ( (c.hbar * c.c**3) / (8 * np.pi * c.G * self._life_evolutions['M'].to(u.kg) * c.k_B) )
+        #temperature_GeV = (temperature_Kelvin * c.k_B).to(u.GeV)  # conversion from Kelvin to GeV
 
         data = {
-            'time_of_evaporation': self._dts['t'],
-            'dtime_of_evaporation': self._dts['dt'],               # Quantity in seconds
+            'elapsed_time': self._dts['t'],
+            'delta_time': self._dts['dt'],               # Quantity in seconds
             'time_to_evaporation': self._dts['rt'],      # Quantity in seconds
             'mass_to_evaporation': self._life_evolutions['M'],  # Quantity in grams
-            'temp_to_evaporation': temperature_GeV,      # Quantity in GeV
-            'spin_to_evaporation': self._life_evolutions['a']  # Quantity (?)
+            #'temp_to_evaporation': temperature_GeV,      # Quantity in GeV
+            'spin_to_evaporation': self._life_evolutions['a'],  # Quantity (?)
+            #'charge_to_evaporation':
         }
         return QTable(data)
 
     @property
-    def radiation_spectra_table_dict(self):
-        '''Qtable  tの間は共通のスペクトルを持つテーブル'''
-        #TODO: total, primary, secondaryにする？
-        # _secondaryは実際にはトータルスペクトルなのでここでパラメータ名を変更した
-        return {key.replace("_secondary", "_total"): value for key, value in self._radiation_spectra_tintegral.items()}
-    
+    def differential_radiation_spectra(self):
+        return self._radiation_spectra
+
+    @property
+    def integral_radiation_spectra(self):
+        return self._radiation_spectra_tintegral
 
     def read_parameter_file(self, param_path=None):
         '''parameters.txt infomation reader function'''
@@ -172,6 +134,8 @@ class BlackHawk:
                 result_path=result_path/f'{particle}_spectrum.txt',
                 particle=particle
                 )
+        
+        self._remove_secondary_anomalies( self._radiation_spectra )
         self._time_integrate_spectra()
         
     def _read_result_dts(self, result_path=None):
@@ -302,116 +266,121 @@ class BlackHawk:
                     self._radiation_spectra[particle].add_row(values)
         logger.info(self._radiation_spectra[particle])
 
+    def _remove_secondary_anomalies(self, all_particles_spectra_table):
+        '''
+        BlackHawk2.3以前（2.3しか確認はしていないけど、、、）は、secondary成分と言っておきながらprimary成分も足されたtotalスペクトルなので、それを修正
+        ついでに、primaryとsecondaryのエネルギー軸も揃えるようにした
+        '''
+        #TODO: total, primary, secondaryにする？
+        # _secondaryは実際にはトータルスペクトルなのでここでパラメータ名を変更する
+        #return {key.replace("_secondary", "_total"): value for key, value in self._radiation_spectra_tintegral.items()}
+        
+        def get_energy_axis(spectrum_table):
+            energy_unit = u.Quantity(spectrum_table.colnames[1:][1]).unit
+            return np.array([
+                                u.Quantity(colname).to(energy_unit).value
+                                        for colname in spectrum_table.colnames[1:]
+
+                            ]) * energy_unit
+            
+        def get_spectrum_axis(spectrum_table, irow):
+            spectrum_data = np.array([])
+            spectrum_unit = spectrum_table[irow][1].unit
+            for jcol in range(1, len(spectrum_table.colnames)):
+                spectrum_data = np.append(spectrum_data, spectrum_table[irow][jcol].value)
+            return spectrum_data * spectrum_unit
+
+        # particle ごとにキーをグループ化して、各particleごとに処理
+        grouped_keys = defaultdict(list)
+        for key in all_particles_spectra_table.keys():
+            particle, _ = key.split("_", 1)
+            grouped_keys[particle].append(key)
+
+        for particle, keys in grouped_keys.items():
+            print(f"Processing secondary {particle} spectra anomalies:")
+            
+            # スペクトルテーブルを成分ごとに取得
+            for key in keys:
+                if key == f"{particle}_secondary":
+                    total_spectra_table = all_particles_spectra_table[key]
+                elif key == f"{particle}_primary":
+                    primary_spectra_table = all_particles_spectra_table[key]
+                    
+            # 共通のエネルギー軸を作成（例えば最小値から最大値までの範囲でサンプリングを統一）
+            common_energy_axis = np.union1d(
+                                    get_energy_axis(total_spectra_table),
+                                    get_energy_axis(primary_spectra_table)
+                                )
+                                
+            # 補正テーブルデータを作成
+            interped_time_table = QTable([total_spectra_table.columns[0]])
+            for colname in common_energy_axis:
+                interped_time_table[str(colname)] = None
+                interped_time_table[str(colname)] = interped_time_table[str(colname)].astype(float)
+                interped_time_table[str(colname)].unit = total_spectra_table[0][1].unit
+            
+            interped_primary_spectra_table = interped_time_table.copy()
+            interped_secondary_spectra_table = interped_time_table.copy()
+        
+            # 各テーブルのフラックスデータをcommon_energy_axisに揃えるように各テーブル行ごとに値を補間する
+            #for colname in enumerate(interped_time_table.colnames):
+            for irow, colname in enumerate(interped_time_table.columns[0]):
+                # 新しいエネルギー軸に対応するtotalスペクトルを作成
+                interped_total_spectrum = np.interp(
+                    common_energy_axis, # 新しいエネルギー軸
+                    get_energy_axis(total_spectra_table), # 古いエネルギー軸
+                    get_spectrum_axis(total_spectra_table, irow), # 古いエネルギー軸に対応するスペクトル
+                )
+                
+                # 新しいエネルギー軸に対応するprimaryスペクトルを作成
+                interped_primary_spectrum = np.interp(
+                    common_energy_axis,
+                    get_energy_axis(primary_spectra_table),
+                    get_spectrum_axis(primary_spectra_table, irow)
+                )
+                
+                # secondary成分の抽出
+                secondary_spectrum = interped_total_spectrum - interped_primary_spectrum
+                
+                # 値をテーブルに詰めていく
+                for j, colname in enumerate(common_energy_axis):
+                    interped_primary_spectra_table[str(colname)][irow] = interped_primary_spectrum[j]
+                    interped_secondary_spectra_table[str(colname)][irow] = secondary_spectrum[j]
+                
+            # 上記で作ったinterped_tableを、入力した元のキーの対応する粒子の各成分のテーブルに代入して更新する
+            for key in keys:
+                if key == f"{particle}_secondary":
+                    all_particles_spectra_table[key] = interped_secondary_spectra_table
+                elif key == f"{particle}_primary":
+                    all_particles_spectra_table[key] = interped_primary_spectra_table
+        
+        return all_particles_spectra_table
+
     def _time_integrate_spectra(self):
         logger.info('Integrate spectra by dt...')
         self._radiation_spectra_tintegral = {}
         for particle, spectrum_table in self._radiation_spectra.items():
             logger.info(particle)
             # Copy the time column
-            tintg_table = QTable([spectrum_table.columns[0]])
+            time_table = QTable([spectrum_table.columns[0]])
             for colname in spectrum_table.colnames:
                 if 'time/energy' not in colname:  # Exclude the time column
-                    tintg_table.add_column(
+                    time_table.add_column(
                         spectrum_table[colname] * self._dts['dt'],
                         name=colname
                         )
+                    tintg_table = time_table
+                    
             self._radiation_spectra_tintegral[particle] = tintg_table
             logger.info(self._radiation_spectra_tintegral[particle])
-
-    def time_window_spectra(self, time_window=None, initial_lifetimes=[]*u.s):
-        """
-        指定された initial_time から initial_time + time_window までの
-        データ範囲のスペクトルリストを作成する
-
-        Parameters:
-        initial_lifetime : Quantity array
-            開始する時間（観測の開始時刻、単位付き）
-        time_window : Quantity
-            観測する時間間隔（単位付き）
-
-        Returns:
-        filtered_spectra : Quantity array
-            指定された範囲のデータ
-        """
-        if initial_lifetimes.to(u.s).min() < time_window.to(u.s):
-            logger.error('')
-            return 1
-
-        # filtering radiatio_spectra_tables
-        radiation_spectra_tables = {}
-        for particle, spectra_table in self._radiation_spectra_tintegral.items():
-            # 時間フィルタリング後の空のテーブルを作成
-            filtered_spectra_table = QTable(
-                names=spectra_table.colnames,
-                units= [u.s] + [( 1 / (u.cm**3 * u.GeV) ).unit] *(len(spectra_table.colnames) - 1)
-            )            
-
-            logger.info(f'{particle} spectrum table is to be reduced by grouping times...')
-            for lifetime in initial_lifetimes:
-                # initial_lifetimesで指定した残り寿命（self._dts["rt"]）に最も近いインデックスを取得する
-                str_idx = np.absolute(self._dts['rt'].to(u.s) - lifetime.to(u.s)).argmin()
-                
-                # str_idxから始めてtime_windowで指定した時間を超えた時の経過時間（self._dts["dt"]）のインデックスを取得する
-                cumsumed_delta_time = 0. * u.s
-                for irow, delta_time in enumerate(self._dts['dt'][str_idx:].to(u.s)):
-                    cumsumed_delta_time += delta_time
-                    if cumsumed_delta_time.to(u.s) >= time_window.to(u.s):
-                        break
-                end_idx = str_idx + irow
-
-                logger.info(f'  {lifetime.to(u.s)}-{lifetime.to(u.s)-time_window.to(u.s)} sec')
-
-                filtered_spectrum_data = {}
-                for colname in spectra_table.colnames:
-                    if colname == 'time/energy':
-                        filtered_spectrum_data[colname] = spectra_table[colname][str_idx].to(u.s)
-                    else:
-                        # str_idx から end_idx-1 までのデータを足し合わせる  
-                        cumsumed_spectra_data = np.sum(spectra_table[colname][str_idx:end_idx])
-
-                        # end_idxのデータを残りのtime_windowで正規化する
-                        cumsumed_delta_time = np.sum(self._dts['dt'][str_idx:end_idx].to(u.s))
-                        remained_time = time_window.to(u.s) - cumsumed_delta_time.to(u.s)
-                        normalization = remained_time.to(u.s).value / self._dts['dt'][end_idx].to(u.s).value
-                        cumsumed_spectra_data += normalization * spectra_table[colname][end_idx]
-
-                        filtered_spectrum_data[colname] = cumsumed_spectra_data
-
-                filtered_spectra_table.add_row(filtered_spectrum_data)
-        
-            radiation_spectra_tables[particle] = filtered_spectra_table
-
-
-        # filtering times_evolution_table
-        times_evolution_table = \
-            QTable(
-                    names=['time', 'delta_time', 'time_to_evaporation', 'mass_to_evaporation', 'temp_to_evaporation', 'spin_to_evaporation'],
-                    units=[u.s, u.s, u.s, u.g, u.GeV, None]
-                )
-        for lifetime in initial_lifetimes:
-            # 指定範囲に該当するインデックスをフィルタリングしてQテーブルを作る
-            str_idx = np.absolute(self._dts['rt'].to(u.s) - lifetime.to(u.s)).argmin()
-
-            evolution_data = {}
-            evolution_data['time'] = self._dts["t"][str_idx]
-            evolution_data['delta_time'] = time_window.to(u.s)
-            evolution_data['time_to_evaporation'] = self._dts["rt"][str_idx]
-            evolution_data['mass_to_evaporation'] = self._life_evolutions['M'][str_idx]
-
-            temperature_Kelvin = ( (c.hbar * c.c**3) / (8 * np.pi * c.G * evolution_data['mass_to_evaporation'].to(u.kg) * c.k_B) )
-            evolution_data['temp_to_evaporation'] = (temperature_Kelvin * c.k_B).to(u.GeV)  # conversion from Kelvin to GeV
-            evolution_data['spin_to_evaporation'] = self._life_evolutions['a'][str_idx]
-            times_evolution_table.add_row(evolution_data)
-
-        return radiation_spectra_tables, times_evolution_table
-
-
+            
     def time_reduce_spectra(
             self,
             min_duration=0.1*u.s,
             min_deltamass=0.1
         ):
         logger.info('Spectrum table is to be reduced by grouping times...')
+        
         reduced_spectra = {}
         # Make row groups for reduction of the spectrum table
         grouping_rtimes = np.full(len(self._life_evolutions), np.nan)
@@ -459,6 +428,16 @@ class BlackHawk:
                 .add_columns(spectrum_rebinned.columns[1:])
             logger.info(reduced_spectra[particle])
         return reduced_spectra
+
+
+
+
+
+
+
+
+
+
 
 
 

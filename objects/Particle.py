@@ -28,10 +28,6 @@ class ParticleDistribution:
         self.spectrum = spectrum  # Should be a numpy.histogram
         self.name = name
         self.spec_hist = spec_hist  # True if spectrum is numpy.histogram; False if spectrum is a tuple of two numpy.array objects
-        
-        ParticleDistributionProfile.__init__(
-            self=self, spectra=spectra_list, energy_bins=energy_bins
-            )
 
     def total_count(self):
         return self.spectrum[0].sum()
@@ -68,8 +64,7 @@ class ParticleDistribution:
     def observed_distribution(self):
         pass
 
-
 class ParticleDistributionProfile:
-    def __init__(self, spectra, energy_bins):
-        self.spectra = spectra
+    def __init__(self, spectra_list, energy_bins):
+        self.spectra = spectra_list
         self.spectra_bins = energy_bins
