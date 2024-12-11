@@ -592,3 +592,99 @@ this object's non-function properties from a JSON file.
                     if path_vmem.exists():
                         data_dict[kmem] = path_vmem
                 setattr(self, kmem, data_dict[kmem])
+
+
+#!/usr/bin/env python
+import numpy as np
+from pathlib import Path, PosixPath
+import numpy.ma as ma
+import matplotlib as mpl
+import json
+from astropy import units as u
+from astropy.time import Time
+from gammapy.modeling.models import SkyModel
+from regions import CircleSkyRegion
+
+from logging import (
+    getLogger,
+    StreamHandler
+)
+
+# Logger
+logger = getLogger(__name__)
+handler = StreamHandler()
+loglevel = 'INFO'
+handler.setLevel(loglevel)
+logger.setLevel(loglevel)
+logger.addHandler(handler)
+
+
+class ObsCampaign:
+    '''ObsCampaign stands for a project to derive a specific result
+    from a series of ObsSnap.
+    It holds information on the target objects
+    and the ObsSnap series.
+    The IRF is assumed to be different for each ObsSnap.
+    ObsCampaign can be composed of multiple observation
+    runs toward one or more celestical regions.
+    '''
+    def __init__(
+            self,
+            obs_snaps={},
+            outdir=Path('.'),
+            reference_time=Time("2000-01-01 00:00:00")
+        ):
+        """Initialize an ObsCampaign instance.
+
+        Parameters:
+        ----------
+        obs_snaps : dict, default={}
+            A dictionary of ObsSnap instances to be analysed in the campaign.
+            The key must be the time starting of the ObsSnap.
+        """
+        self.outdir = outdir if isinstance(outdir, Path) else Path(outdir)
+        self.outdir.mkdir(parents=True, exist_ok=True)
+        self.obs_snaps = obs_snaps
+        self.reference_time = reference_time
+
+
+    def timeres_onoffspectra(self):
+        timeres_onoffspectra = []
+        for obs_snap in self.obs_snaps.values():
+            timeres_onoffspectra.append(
+                obs_snap.onoff_spectrum_dataset
+            )
+        return timeres_onoffspectra
+
+    def timeres_cubes(self):
+        timeres_cubes = []
+        for obs_snap in self.obs_snaps.values():
+            timeres_cubes.append(
+                obs_snap.map_dataset.counts
+            )
+        return timeres_cubes
+
+
+
+    def list_obs_snaps(self):
+        """Returns a list of ObsSnap objects.
+
+        Returns:
+        -------
+        obs_snaps: list
+            A list of ObsSnap objects.
+        """
+        return list(self.obs_snaps.values())
+
+    def on_regions(self):
+        """Returns a list of on regions for each observation.
+
+        Returns:
+        -------
+        on_regions: list
+            A list of on regions for each observation.
+        """
+        on_regions = []
+        for obs_snap in self.obs_snaps.values():
+            on_regions.append(obs_snap.oncount_geom.region)
+        return on_regions

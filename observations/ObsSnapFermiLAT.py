@@ -1,10 +1,13 @@
-from astropy.coordinates import Angle, SkyCoord
+from astropy import constants as c
 from astropy import units as u
+from astropy.time import Time
+from astropy.coordinates import SkyCoord, Angle
+from astropy.table import QTable
+
 from pathlib import Path
 from gammapy.maps import MapAxis, WcsNDMap, HpxNDMap
 from gammapy.modeling.models import Models
 import numpy as np
-from astropy.table import QTable
 
 from logging import getLogger, StreamHandler
 logger = getLogger(__name__)
@@ -52,22 +55,21 @@ class ObsSnapFermiLAT:
         if invalid_attributes:
             raise ValueError(f"The following attributes cannot be included: {', '.join(invalid_attributes)}")
 
+        # dataset.counts と dataset.exposure が同じ型（WcsNDMap または HpxNDMap）かどうかの確認
         if isinstance(dataset.counts, type(dataset.exposure)) and isinstance(dataset.counts, (WcsNDMap, HpxNDMap)):
-            # dataset.counts と dataset.exposure が同じ型（WcsNDMap または HpxNDMap）で一致している場合
-            print(f"The input MapDataset is based on {type(dataset.exposure)}.")
+            logger.info(f"The input MapDataset is based on {type(dataset.exposure)}.")
         else:
             logger.warn(f"The input MapDataset is a mixture of {type(dataset.counts)} and {type(dataset.exposure)}.")
         
         self._map_dataset = dataset
-    
+        
     @property
     def map_dataset(self):
         return self._map_dataset
-
+    
     # エネルギー軸を可変する関数
     # ピクセルサイズを可変する関数
     # 時間窓でフィルタリングして可変する関数
-    
         
     def split_galactic_plane(self, map, lat_threshold, keep_geometry=True, mask_value=np.nan):
         """
@@ -129,12 +131,13 @@ class ObsSnapFermiLAT:
         self,
         ewindow=None,
         cwindow=None,
-        mask_galactic_plane=False,
+        mask_galactic_plane=True,
         mask_off_plane=False,
         lat_threshold=10*u.deg,
         adjust_pixel_size=False,
         new_binsz=None,
         new_nside=None,
+        show=True,
     ):
         """
         Evaluates the counts distribution within the dataset.
@@ -258,50 +261,114 @@ class ObsSnapFermiLAT:
                 pass
             elif isinstance(cmasked_roi_counts, HpxNDMap):
                 # Upsample or downsample the map to a given nside.
-                cmasked_roi_counts = cmasked_roi_counts.to_nside(nside, preserve_counts=True)
-                cpassed_roi_counts = cpassed_roi_counts.to_nside(nside, preserve_counts=True)
+                cmasked_roi_counts = cmasked_roi_counts.to_nside(new_nside, preserve_counts=True)
+                cpassed_roi_counts = cpassed_roi_counts.to_nside(new_nside, preserve_counts=True)
           
         #=========#
         # プロット #
         #=========#
-        fig = plt.figure(figsize=(10, 6))
-        gs = GridSpec(2, 2, width_ratios=[1, 1], height_ratios=[1, 1], figure=fig)
+        if show:
+            fig = plt.figure(figsize=(10, 6))
+            gs = GridSpec(2, 2, width_ratios=[1, 1], height_ratios=[1, 1], figure=fig)
 
-        axes = {
-            "Left": fig.add_subplot(gs[:, 0]),
-            "Top Right": fig.add_subplot(gs[0, 1]),
-            "Bottom Right": fig.add_subplot(gs[1, 1])
-        }
+            axes = {
+                "Left": fig.add_subplot(gs[:, 0]),
+                "Top Right": fig.add_subplot(gs[0, 1]),
+                "Bottom Right": fig.add_subplot(gs[1, 1])
+            }
 
-        plot_hists = [
-            {"ax": "Left", "data": cmasked_roi_counts.data.flatten(), "color": "black", "log": False},
-        ]
-        plot_maps = [
-            {"ax": "Top Right", "data": cmasked_roi_counts, "title": "", "stretch": "log"},
-            {"ax": "Bottom Right", "data": cpassed_roi_counts, "title": "Distribution of events through energy and counting windows", "stretch": "log"},
-        ]
-        
-        for hist in plot_hists:
-            ax = axes[hist["ax"]]
-            ax.hist(hist["data"], bins="auto", histtype="step", color=hist["color"], log=hist["log"])
-            ax.set_xlabel("Counts per Pixel")
-            ax.set_ylabel("Number of Pixels")
-            ax.grid(True)
-
-        for map in plot_maps:
-            ax_map = axes[map["ax"]]
-        
-            # プロットの際には、np.nanだとマップ外側の領域と同じ色になって見えにくいのでnp.nanを0に変更してプロットする
-            # Bug: galacticとかでのマスクまで見えてしまう。
-            if map["ax"] == "Top Right":
-                top_right_map = map["data"].copy()
-                top_right_map.data = np.nan_to_num(masked_count_window_data, nan=0)
-                map["data"] = top_right_map
+            plot_hists = [
+                {"ax": "Left", "data": cmasked_roi_counts.data.flatten(), "color": "black", "log": False},
+            ]
+            plot_maps = [
+                {"ax": "Top Right", "data": cmasked_roi_counts, "title": "", "stretch": "log"},
+                {"ax": "Bottom Right", "data": cpassed_roi_counts, "title": "Distribution of events through energy and counting windows", "stretch": "log"},
+            ]
             
-            map["data"].plot(ax=ax_map, stretch=map["stretch"], add_cbar=True)
-            ax_map.set_xticks([])
-            ax_map.set_yticks([])
-            ax_map.set_title(map["title"])
+            for hist in plot_hists:
+                ax = axes[hist["ax"]]
+                ax.hist(hist["data"], bins="auto", histtype="step", color=hist["color"], log=hist["log"])
+                ax.set_xlabel("Counts per Pixel")
+                ax.set_ylabel("Number of Pixels")
+                ax.grid(True)
 
-        plt.tight_layout()
-        plt.show()
+            for map in plot_maps:
+                ax_map = axes[map["ax"]]
+                map["data"].plot(ax=ax_map, stretch=map["stretch"], add_cbar=True)
+                ax_map.set_xticks([])
+                ax_map.set_yticks([])
+                ax_map.set_title(map["title"])
+
+            plt.tight_layout()
+            plt.show()
+        
+        else:
+            return cmasked_roi_counts, cpassed_roi_counts
+
+
+class ObsCampaignFermiLAT:
+    '''ObsCampaign stands for a project to derive a specific result
+    from a series of ObsSnap.
+    It holds information on the target objects
+    and the ObsSnap series.
+    The IRF is assumed to be different for each ObsSnap.
+    ObsCampaign can be composed of multiple observation
+    runs toward one or more celestical regions.
+    '''
+    def __init__(
+            self,
+            obs_snaps={},
+            outdir=Path('.'),
+            reference_time=Time("2000-01-01 00:00:00")
+        ):
+        """Initialize an ObsCampaign instance.
+
+        Parameters:
+        ----------
+        obs_snaps : dict, default={}
+            A dictionary of ObsSnap instances to be analysed in the campaign.
+            The key must be the time starting of the ObsSnap.
+        """
+        self.obs_snaps = obs_snaps
+        self.reference_time = reference_time
+
+    def timeres_onoffspectra(self):
+        timeres_onoffspectra = []
+        for obs_snap in self.obs_snaps.values():
+            timeres_onoffspectra.append(
+                obs_snap.onoff_spectrum_dataset
+            )
+        return timeres_onoffspectra
+
+    def timeres_cubes(self):
+        timeres_cubes = []
+        for obs_snap in self.obs_snaps.values():
+            timeres_cubes.append(
+                obs_snap.map_dataset.counts
+            )
+        return timeres_cubes
+
+
+
+    def list_obs_snaps(self):
+        """Returns a list of ObsSnap objects.
+
+        Returns:
+        -------
+        obs_snaps: list
+            A list of ObsSnap objects.
+        """
+        return list(self.obs_snaps.values())
+
+    def on_regions(self):
+        """Returns a list of on regions for each observation.
+
+        Returns:
+        -------
+        on_regions: list
+            A list of on regions for each observation.
+        """
+        on_regions = []
+        for obs_snap in self.obs_snaps.values():
+            on_regions.append(obs_snap.oncount_geom.region)
+        return on_regions
