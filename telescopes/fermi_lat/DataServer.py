@@ -1,5 +1,5 @@
-class DataServer:
-    pass
-    
 class DataFetcher:
+    pass
+
+def download_datafiles():
     pass

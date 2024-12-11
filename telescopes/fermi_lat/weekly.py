@@ -4,12 +4,13 @@ import re
 from pathlib import Path
 from pbh_explorer.utils import PathChecker as PathC
 
+from astropy import units as u
 from gammapy.data import GTI
 import glob
 import subprocess
 from .recommended_parameter import get_config
-from GtApp import GtApp
-import gt_apps
+#from GtApp import GtApp
+#import gt_apps
 import os
 import shutil
 from pathlib import Path
@@ -21,8 +22,41 @@ from gammapy.maps import Map, MapAxis, WcsGeom, HpxGeom
 from gammapy.irf import PSFMap, EDispKernelMap
 
 
-def download_datafiles():
-    pass
+import pandas as pd
+
+def split_datafiles(combined_data, output_dir, chunk_size=1000):
+    """
+    分割されたデータセットを元のファイルに戻す関数
+    
+    Parameters:
+    - combined_data: 結合されたデータセット（pandas DataFrame）
+    - output_dir: 分割されたファイルを保存するディレクトリ
+    - chunk_size: 各ファイルに分割する行数（デフォルトは1000行ごと）
+    """
+    # データの長さを確認
+    num_rows = len(combined_data)
+    
+    # 分割するファイル数を計算
+    num_files = (num_rows // chunk_size) + (1 if num_rows % chunk_size != 0 else 0)
+    
+    # データを指定された行数ごとに分割してファイルに保存
+    for i in range(num_files):
+        # チャンクの開始と終了インデックス
+        start_idx = i * chunk_size
+        end_idx = min((i + 1) * chunk_size, num_rows)
+        
+        # 現在のチャンク
+        chunk_data = combined_data.iloc[start_idx:end_idx]
+        
+        # ファイル名の作成（例: data_part_1.csv）
+        file_name = f"data_part_{i+1}.csv"
+        file_path = f"{output_dir}/{file_name}"
+        
+        # ファイルに書き込む
+        chunk_data.to_csv(file_path, index=False)
+        
+        print(f"保存しました: {file_path}")
+
 
 def combine_datafiles(lat_photon_weekly_files):
     # combine the weekly files into a single file
@@ -49,12 +83,14 @@ script_dirpath = os.path.dirname(__file__)
 class WeeklyDataAnalysis:
     def __init__(
         self,
+        livetime=1*u.week,
         photon_filename=os.path.join(script_dirpath, "weekly/lat_photon_weekly_w843_p305_v001.fits"),
         spacecraft_filename=os.path.join(script_dirpath, "weekly/lat_spacecraft_weekly_w843_p310_v001.fits"),
         diffuse_bkg_filename=os.path.join(script_dirpath, "xml/diffuse_bkg.xml"),
         use_scratch_dir=False,
     ):
         self._config = get_config("All-Sky Point Source")
+        self._livetime = livetime
         
         self._ft1_filename = str( PathC.confirm_file_path(Path(photon_filename), "ft1") )
         self._ft2_filename = str( PathC.confirm_file_path(Path(spacecraft_filename), "ft2") )
@@ -267,7 +303,28 @@ class WeeklyDataAnalysis:
                         unit="MeV", name="energy"
                     ),
         map_type="wcs",
+        background_mode="fermi_tools"
     ):
+        """
+        Parameters
+        ----------
+        energy_axis : MapAxis
+            エネルギー軸の設定
+        map_mode : str
+            出力マップ形式の設定方法。以下から選択:
+            - "wcs"
+            - "hpx"
+        background_mode : str
+            バックグラウンドの設定方法。以下から選択:
+            - "fermi_tools": FERMI TOOLS の解析結果を使用
+            - "model_only": モデルを設定して npred を計算
+            - "precomputed_map": 事前計算された固定マップを使用
+
+        Returns
+        -------
+        dataset : MapDataset
+            作成した MapDataset。
+        """
         weekly_dir = os.path.join(script_dirpath, "weekly")
         outdir = os.path.join(weekly_dir, self._outdirname)
         if not os.path.exists(outdir):
@@ -275,6 +332,7 @@ class WeeklyDataAnalysis:
             print("please run 'run_fermi_pipeline()' function before execute this function")
             return -1
         
+        # 指定したエネルギー軸とmap_typeごとに、カウントマップを作成
         if map_type == "wcs":
             algorithm = "ccube"
             counts_filename = os.path.join(outdir, f"gtmktime_{algorithm}.fits")
@@ -304,43 +362,55 @@ class WeeklyDataAnalysis:
             return -1
         counts = counts.interp_to_geom(new_energy_axis_geom)
         
-        background_filename = os.path.join(outdir, f"gtsrcmaps_diffuse_{algorithm}.fits")
-        background = Map.read(background_filename)
-        background = background.interp_to_geom(new_energy_axis_geom)
-
+        # エクスポージャー
         exposure_filename = os.path.join(outdir, f"gtexpcube2_{algorithm}.fits")
         exposure = Map.read(exposure_filename)
         # for some reason the WCS definitions are not aligned...
         #exposure.geom._wcs = counts.geom.wcs
 
+        # psf
         psf_filename = os.path.join(outdir, "gtpsf.fits")
         psf = PSFMap.read(psf_filename, format="gtpsf")
         # reduce size of the PSF
         #psf = psf.slice_by_idx(slices={"rad": slice(0, 130)})
 
+        # edisp
         edisp = EDispKernelMap.from_diagonal_response(
             energy_axis=counts.geom.axes["energy"],
             energy_axis_true=exposure.geom.axes["energy_true"],
         )
-
+        
+        #
+        background_filename = os.path.join(outdir, f"gtsrcmaps_diffuse_{algorithm}.fits")
+        if background_mode == "fermi_tools":
+            bkg_map = Map.read(background_filename)
+            bkg_map = bkg_map.interp_to_geom(new_energy_axis_geom)
+            bkg_models = None
+        elif background_mode == "model_only":
+            #background_filenameから使われたモデルのファイルパスを取り出す
+            bkg_map=None
+            pass
+        elif background_mode == "precomputed_map":
+            #background_filenameから使われたモデルのファイルパスを取り出す
+            bkg_map=None
+            pass
+        
         #mask_safe = counts.geom.boundary_mask(width="0.2 deg")
         mask_safe = None
-
+        
+        # observationの情報
         gti = GTI.read(self._ft1_filename)
         
         return MapDataset(
-            models=None, #ここをゼロにすると、backgroundで渡したmapのカウントがそのままnpredになる
+            models=bkg_models, #ここをゼロにすると、backgroundで渡したmapのカウントがそのままnpredになる
             counts=counts,
-            background=background,
+            background=bkg_map,
             exposure=exposure,
             psf=psf,
             edisp=edisp,
             mask_safe=mask_safe,
             gti=gti
         )
-
-    def create_xml_from_models(self):
-        pass
         
     def unbinned_likelihood(self):
         pass
@@ -396,65 +466,3 @@ if __name__ == "__main__":
     data.append(dataset.counts.slice_by_idx({"energy": slice(2, 5)}).data)
     
     plot_counts_histogram(data, log_scale="log")
-    
-    '''
-    
-
-    from astropy import units as u
-    from astropy.coordinates import SkyCoord
-
-    # %matplotlib inline
-    import matplotlib.pyplot as plt
-    from IPython.display import display
-    from gammapy.data import EventList
-    from gammapy.datasets import Datasets, MapDataset
-    from gammapy.irf import EDispKernelMap, PSFMap
-    from gammapy.maps import Map, MapAxis, WcsGeom
-    from gammapy.modeling import Fit
-    from gammapy.modeling.models import (
-        Models,
-        PointSpatialModel,
-        PowerLawNormSpectralModel,
-        PowerLawSpectralModel,
-        SkyModel,
-        TemplateSpatialModel,
-        create_fermi_isotropic_diffuse_model,
-    )
-
-    # Spatial model (point source at Galactic coordinates l=0, b=0)
-    spatial_model = PointSpatialModel(lon_0="0 deg", lat_0="0 deg", frame="galactic")
-
-    # Spectral model (Power-law with specific parameters)
-    spectral_model = PowerLawSpectralModel(
-        index=2.7,
-        amplitude="5.8e-10 cm-2 s-1 TeV-1",
-        reference="100 GeV"
-    )
-
-    # Define the sky model
-    source = SkyModel(
-        spectral_model=spectral_model,
-        spatial_model=spatial_model,
-        name="source-gc"
-    )
-
-    # Create the Models object
-    models = Models([source])
-
-    # Create the MapDataset with the defined models and other dataset properties
-    dataset = MapDataset(
-        models=models,
-        counts=dataset.counts,
-        background=dataset.background,
-        exposure=dataset.exposure,
-        psf=dataset.psf,
-        edisp=dataset.edisp,
-        name="fermi-dataset"
-    )
-    print(dataset)
-
-    dataset.fake()
-    print(dataset)
-
-    
-    '''
