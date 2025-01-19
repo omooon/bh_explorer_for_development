@@ -68,3 +68,33 @@ class ParticleDistributionProfile:
     def __init__(self, spectra_list, energy_bins):
         self.spectra = spectra_list
         self.spectra_bins = energy_bins
+
+class ParticleDistributionProfileBlackHawk:
+    def __init__(self, spec_table, blackhole, particle, name):
+        energy_bins = np.array([
+            u.Quantity(colname).to(u.GeV).value
+            for colname in spec_table.colnames[1:]
+            ]) * u.GeV
+        spectra_list = []
+        for colname in spec_table.colnames[1:]:
+            spectra_list.append(
+                (spec_table[colname] * u.cm**3).to(u.GeV**(-1)).value
+                )  # Convert from 1/(GeV cm3) to count number/GeV
+        spectra_array = np.array(spectra_list).T
+        spectra_list = []
+        for irow in reversed(range(len(spec_table))):
+            spectrum_values = spectra_array[irow] * u.GeV**(-1)
+            particle_graph = (spectrum_values, energy_bins)
+            spectra_list.append(
+                ParticleDistribution(
+                    particle=particle,
+                    position=blackhole.position,
+                    spectrum=particle_graph,  # particle_hist,
+                    name=name,
+                    spec_hist=False,
+                )
+            )
+            # profiles['{0}_spectrum'.format(particle)].append(particle_graph)
+        ParticleDistributionProfile.__init__(
+            self=self, spectra=spectra_list, energy_bins=energy_bins
+            )

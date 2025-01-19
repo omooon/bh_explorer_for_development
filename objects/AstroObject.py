@@ -6,289 +6,218 @@ from array import array
 import math
 import matplotlib as mpl
 import matplotlib.pyplot as plt
-from logging import getLogger, StreamHandler
 
-# Logger
+from pathlib import Path
+from pbh_explorer.objects.blackhole.BlackHawk import BlackHawk
+
+from astropy import constants as c
+from astropy import units as u
+from astropy.coordinates import SkyCoord, Angle
+from astropy.time import Time, TimeDelta
+from astropy.table import QTable
+
+from gammapy.modeling.models import (
+    PointSpatialModel,
+    TemplateSpectralModel,
+    CompoundSpectralModel,
+    SkyModel
+)
+
+from logging import getLogger, StreamHandler
 logger = getLogger(__name__)
 handler = StreamHandler()
-loglevel = 'INFO'
+loglevel="INFO"
 handler.setLevel(loglevel)
 logger.setLevel(loglevel)
 logger.addHandler(handler)
 
-from astropy import constants as c
-from astropy import units as u
-from astropy.time import Time
-from astropy.coordinates import SkyCoord
-from astropy.table import QTable
-
-from pathlib import Path
-from pbh_explorer.objects import Particle
-from pbh_explorer.objects.blackhole.BlackHawk import BlackHawk
-from astropy.time import Time
-
-from gammapy.modeling.models import (
-    Models,
-    PointSpatialModel,
-    SkyModel,
-    TemplateSpectralModel,
-    CompoundSpectralModel
-)
-
-class AstroObject:
-    '''Most general class of astronomical objects.
-    This class holds a time-profile of each physical parameter.'''
+class AstroObjectTracker:
     def __init__(
         self,
-        epoch="J2000.0",
-        position={"RA": 0*u.deg, "Dec": 0*u.deg, "distance": 1*u.parsec},
-        velocity={"proper_motion_ra":0*u.deg/u.yr, "proper_motion_dec":0*u.deg/u.yr, "radial_velocity": 0*u.km/u.s},
+        epoch="2000-01-01 00:00:00",
+        position={"ra": 0 * u.deg, "dec": 0 * u.deg, "distance": 1 * u.pc},
+        velocity={"pm_ra_cosdec": 0 * u.mas / u.yr, "pm_dec": 0 * u.mas / u.yr, "radial_velocity": 0 * u.km / u.s},
+        loglevel=None
     ):
-        '''
-        Initialize the AstroObject instance.
+        """
+        Most general class of astronomical objects. This class holds a time-profile of each physical parameter.
+    
+        Although a galactic coordinate system can be given, all functions are calculated on the basis of an equatorial coordinate system.
 
         Parameters:
-        - source : Name or source identifier for the object.
-            このパラメータた、objectの物理的な性質（mass,radius,luminosity,temperature）について保持している
-        - current_time (str): Reference time for the given position and motion.
-        - position (dict): Initial position (RA/Dec/Distance or x/y/z).
-        - velocity (dict): Initial velocity (Proper Motion/Radial Velocity or vx/vy/vz).
-        '''
-        
-        self.epoch = Time(epoch)
-        self.ra = position.get("RA")
-        self.dec = position.get("Dec")
-        self.distance = position.get("distance")  # in parsecs or other units
-        self.proper_motion_ra = velocity.get("proper_motion_ra")  # arcsec/yr
-        self.proper_motion_dec = velocity.get("proper_motion_dec")  # arcsec/yr
-        self.radial_velocity = velocity.get("radial_velocity")  # km/s
-        
-        # 状態履歴を記録する辞書、初期状態を保存しておく
-        self.current_time = self.epoch
-        self.state_history = QTable(self.get_current_state())
-
-    def __str__(self):
+        - position (dict): Initial position (RA/Dec/Distance).
+        - velocity (dict): Initial velocity (Proper Motion/Radial Velocity).
+        - initial_epoch
+        - final_epoch
         """
-        Display the initial state of the AstroObject.
-        """
-        return (f"[Epoch: {self.epoch}] - Spherical Coordinates:\n"
-                f"  RA: {self.ra}\n"
-                f"  Dec: {self.dec}\n"
-                f"  Distance: {self.distance} parsecs\n"
-                f"  Proper Motion (RA): {self.proper_motion_ra} arcsec/yr\n"
-                f"  Proper Motion (Dec): {self.proper_motion_dec} arcsec/yr\n"
-                f"  Radial Velocity: {self.radial_velocity} km/s\n")
+        if loglevel:
+            logger.setLevel(loglevel)
+            for handler in logger.handlers:
+                handler.setLevel(loglevel)
             
+        if "ra" in position and "dec" in position:
+            icrs_sky_coord = SkyCoord(
+                frame="icrs",
+                obstime=Time(epoch),
+                ra=position.get("ra"),
+                dec=position.get("dec"),
+                distance=position.get("distance"),
+                pm_ra_cosdec=velocity.get("pm_ra_cosdec"),
+                pm_dec=velocity.get("pm_dec"),
+                radial_velocity=velocity.get("radial_velocity")
+            )
+            galactic_sky_coord = icrs_sky_coord.galactic
+        elif "l" in position and "b" in position:
+            galactic_sky_coord = SkyCoord(
+                frame="galactic",
+                obstime=Time(epoch),
+                ra=position.get("l"),
+                dec=position.get("b"),
+                distance=position.get("distance"),
+                pm_ra_cosdec=velocity.get("pm_l_cosb"),
+                pm_dec=velocity.get("pm_b"),
+                radial_velocity=velocity.get("radial_velocity")
+            )
+            icrs_sky_coord = galactic_sky_coord.icrs
+        else:
+            raise ValueError("Position dictionary must contain either ra/dec or l/b.")
+
+        self.epoch_state = {
+            "date": icrs_sky_coord.obstime.iso,
+            "ra": icrs_sky_coord.ra,
+            "dec": icrs_sky_coord.dec,
+            "l": icrs_sky_coord.galactic.l,
+            "b": icrs_sky_coord.galactic.b,
+            "distance": icrs_sky_coord.distance,
+            "pm_ra_cosdec": icrs_sky_coord.pm_ra_cosdec,
+            "pm_dec": icrs_sky_coord.pm_dec,
+            "pm_l_cosb": icrs_sky_coord.galactic.pm_l_cosb,
+            "pm_b": icrs_sky_coord.galactic.pm_b,
+            "radial_velocity": icrs_sky_coord.radial_velocity,
+        }
+        self.skycoord = icrs_sky_coord
+        
     @classmethod
-    def generate_random_distribution(
+    def arrangement_of_random_epoch_distributions(
         cls,
-        epoch_range=("2000-01-01", "2010-01-01"),
-        position_range={"RA": (0, 360), "Dec": (-90, 90), "distance": (0.01, 1)},
-        velocity_range={"proper_motion_ra": (0, 0), "proper_motion_dec": (0, 0), "radial_velocity": (0, 0)},
+        epoch_range=("2000-01-01", "2000-01-01"),
+        position_range={"ra": (0, 360)*u.deg, "dec": (-90, 90)*u.deg, "distance": (0.01, 1)*u.parsec},
+        velocity_range={"pm_ra_cosdec": (0, 0)*u.mas/u.yr, "pm_dec": (0, 0)*u.mas/u.yr, "radial_velocity": (0, 0)*u.km/u.s},
+        loglevel=None
     ):
         '''
         Generate an AstroObject instance with random parameters, including epoch.
         
         Parameters:
-        - coordinate_system (str): Coordinate system to use ('spherical' or 'cartesian').
-        - time_range (tuple): Range for epoch as start and end date strings (e.g., "2000-01-01").
         - position_range (dict): Range for position parameters.
         - velocity_range (dict): Range for velocity parameters.
-        
+        -initial_epoch_range
+        -final_epoch_range
+    
         Returns:
         - AstroObject: A randomly generated AstroObject instance.
         '''
-        # ランダムな時刻を生成
-        start_epoch = Time(epoch_range[0])
-        end_epoch = Time(epoch_range[1])
-        random_epoch = start_epoch + np.random.uniform(0, (end_epoch - start_epoch).jd) * u.day
-
+        epoch_range = Time(epoch_range)
+        random_epoch = epoch_range[0] + np.random.uniform(0, (epoch_range[1] - epoch_range[0]).jd) * u.day
+        
         position = {
-            "RA": np.random.uniform(position_range["RA"][0], position_range["RA"][1]) * u.deg,
-            "Dec": np.random.uniform(position_range["Dec"][0], position_range["Dec"][1]) * u.deg,
-            "distance": np.random.uniform(position_range["distance"][0], position_range["distance"][1]) * u.parsec,
+            "ra": np.random.uniform(position_range["ra"][0].value, position_range["ra"][1].value) * position_range["ra"].unit,
+            "dec": np.random.uniform(position_range["dec"][0].value, position_range["dec"][1].value) * position_range["dec"].unit,
+            "distance": np.random.uniform(position_range["distance"][0].value, position_range["distance"][1].value) * position_range["distance"].unit,
         }
         
         velocity = {
-            "proper_motion_ra": np.random.uniform(velocity_range["proper_motion_ra"][0], velocity_range["proper_motion_ra"][1]) * u.deg/u.yr,
-            "proper_motion_dec": np.random.uniform(velocity_range["proper_motion_dec"][0], velocity_range["proper_motion_dec"][1]) * u.deg/u.yr,
-            "radial_velocity": np.random.uniform(velocity_range["radial_velocity"][0], velocity_range["radial_velocity"][1]) * u.km/u.s,
+            "pm_ra_cosdec": np.random.uniform(velocity_range["pm_ra_cosdec"][0].value, velocity_range["pm_ra_cosdec"][1].value) * velocity_range["pm_ra_cosdec"].unit,
+            "pm_dec": np.random.uniform(velocity_range["pm_dec"][0].value, velocity_range["pm_dec"][1].value) * velocity_range["pm_dec"].unit,
+            "radial_velocity": np.random.uniform(velocity_range["radial_velocity"][0].value, velocity_range["radial_velocity"][1].value) * velocity_range["radial_velocity"].unit,
         }
-
         return cls(
-            epoch=random_epoch.iso,  # ISOフォーマットで渡す
-            position=position,
-            velocity=velocity
-        )
-        
-    def get_current_state(self):
-        '''
-        Get the current state of the AstroObject.
-        Returns a dictionary representing the current position, velocity, and time.
-        '''
-        state = {
-            "time": [self.current_time.iso],
-        }
-        state.update({
-            "RA": [self.ra],
-            "Dec": [self.dec],
-            "Distance": [self.distance],
-            "Proper Motion RA": [self.proper_motion_ra],
-            "Proper Motion Dec": [self.proper_motion_dec],
-            "Radial Velocity": [self.radial_velocity],
-        })
-        return state
-
-    def update_state(self, time):
-        '''
-        Update the state of the object to a specific time.
-        The method calculates the position and velocity at the given time.
-        
-        Parameters:
-        - time (str or astropy.time.Time): The target time to update the state to.
-        '''
-        new_time = Time(time)
-        delta_time = (new_time - self.current_time).to(u.yr).value  # 年単位の差分
-
-        # Proper motionによるRA/Decの更新
-        new_ra = self.ra + (self.proper_motion_ra * delta_time)
-        new_dec = self.dec + (self.proper_motion_dec * delta_time)
-        # 距離と視線速度による距離変化
-        new_distance = self.distance + (self.radial_velocity * delta_time).to(u.parsec)
-
-        # 更新
-        self.ra = new_ra
-        self.dec = new_dec
-        self.distance = new_distance
-
-        # 現在時刻の更新
-        self.current_time = new_time
-
-        # 状態履歴に記録
-        self.state_history.append(self.get_current_state())
-
-    def to_skycoord(self, frame="icrs"):
-        """
-        Create a SkyCoord object from RA, Dec, and distance, with a specified coordinate frame.
-        
-        Parameters:
-        - ra (float): Right Ascension (RA) in degrees.
-        - dec (float): Declination (Dec) in degrees.
-        - distance (float): Distance to the object in parsecs.
-        - frame (str): Coordinate frame ("icrs" or "galactic"). Defaults to "icrs".
-        
-        Returns:
-        - SkyCoord: SkyCoord object in the specified frame.
-        """
-        # Create the SkyCoord object in the ICRS frame
-        coord = SkyCoord(ra=self.ra, dec=self.dec, distance=self.distance, frame="icrs")
-        
-        # Convert to the desired frame if specified
-        if frame == "galactic":
-            coord = coord.transform_to("galactic")
-        elif frame != "icrs":
-            raise ValueError("Unsupported frame. Use 'icrs' or 'galactic'.")
-        
-        return coord
-
-    def to_qtable(self):
-        '''Convert parameters to a QTable.'''
-        initial_qtable = QTable()
-        for key, value in self._initial_params.items():
-            if isinstance(value, dict):  # For position and velocity dictionaries
-                for subkey, subvalue in value.items():
-                    initial_qtable[f"{subkey}"] = [subvalue]
-            else:
-                initial_qtable[key] = [value]
-        return initial_qtable
-
-class BlackHole(AstroObject):
-    '''Class representing a Black Hole, derived from AstroObject.'''
-    #internal_processes = {"AccretionProcess":(rate=1*u.M_sun/u.year), "JetFormation":(power=1e38*u.W)}
-    
-    def __init__(self, mass=1e+15*u.kg, spin=0, charge=0, internal_processes={}, **kwargs):
-        # `AstroObject` の親クラスを呼び出して基本的な初期化を行う
-        super().__init__(**kwargs)
-        
-        self.mass = mass
-        self.spin = spin
-        self.charge = charge
-        self.internal_processes = internal_processes
-
-    def __str__(self):
-        """
-        Returns a string representation of the BlackHole instance,
-        including parent class properties and BlackHole-specific properties.
-        """
-        parent_str = super().__str__()  # Get string from the parent class
-        black_hole_info = (
-            f"  Mass: {self.mass}\n"
-            f"  Spin: {self.spin}\n"
-            f"  Charge: {self.charge}\n"
-        )
-        internal =f"Internal Processes: {', '.join(str(proc) for proc in self.internal_processes) if self.internal_processes else 'None'}"
-        return f"{parent_str}\nBlack Hole Specifics:\n{black_hole_info}\n{internal}"
-
-    @classmethod
-    def generate_random_bh(
-        cls,
-        epoch_range=("2000-01-01", "2010-01-01"),
-        position_range={"RA": (0, 360), "Dec": (-90, 90), "distance": (0.01, 1)},
-        velocity_range={"proper_motion_ra": (0, 0), "proper_motion_dec": (0, 0), "radial_velocity": (0, 0)},
-        mass_range=(1e+12, 1e+30),
-        spin_range=(0, 0),
-        charge_range=(0, 0),
-        internal_processes={}
-    ):
-        '''
-        Generate a random BlackHole instance with random physical parameters, including mass, spin, charge, and epoch.
-        
-        Parameters:
-        - coordinate_system (str): Coordinate system to use ('spherical' or 'cartesian').
-        - epoch_range (tuple): Range for epoch as start and end date strings (e.g., "2000-01-01").
-        - position_range (dict): Range for position parameters.
-        - velocity_range (dict): Range for velocity parameters.
-        - mass_range (tuple): Range for mass of the black hole.
-        - spin_range (tuple): Range for spin parameter.
-        - charge_range (tuple): Range for charge parameter.
-        
-        Returns:
-        - BlackHole: A randomly generated BlackHole instance.
-        '''
-        # 既存のランダム分布生成を呼び出す
-        astro_obj = super().generate_random_distribution(
-            epoch_range=epoch_range,
-            position_range=position_range,
-            velocity_range=velocity_range
-        )
-        epoch=astro_obj.epoch.iso,
-        position={"RA": astro_obj.ra, "Dec": astro_obj.dec, "distance": astro_obj.distance}
-        velocity={"proper_motion_ra":astro_obj.proper_motion_ra, "proper_motion_dec":astro_obj.proper_motion_dec, "radial_velocity": astro_obj.radial_velocity}
-        
-        # ブラックホールの特異なパラメータ（質量、スピン、電荷）をランダムに生成
-        mass = np.random.uniform(mass_range[0], mass_range[1]) * u.kg
-        spin = np.random.uniform(spin_range[0], spin_range[1])
-        charge = np.random.uniform(charge_range[0], charge_range[1])
-        
-        # `BlackHole` のインスタンスを生成して返す
-        return cls(
-            mass=mass,
-            spin=spin,
-            charge=charge,
-            internal_processes=internal_processes,
-            epoch=epoch,
+            epoch=random_epoch,
             position=position,
             velocity=velocity,
+            loglevel=loglevel
         )
     
-    def calculate_radius(self, bh_type="schwarzschild"):
-        if bh_type == "schwarzschild":
-            pass
-        elif bh_type == "ergosphere":
-            pass
-        elif bh_type == "photon_sphere":
-            pass
+    def track_states(self, observation_dates):
+        """
+        Tracks the state of the object at each specified observation time.
 
+        Parameters:
+        - observation_dates (list of str): List of observation times in ISO format.
+
+        Returns:
+        - List of dictionaries, each containing the state at a specific time.
+        """
+        state = {
+            "time": [],
+            "ra": [],
+            "dec": [],
+            "distance": [],
+            "pm_ra_cosdec": [],
+            "pm_dec": [],
+            "radial_velocity": [],
+            "l": [],
+            "b": [],
+            "pm_l_cosb": [],
+            "pm_b": [],
+        }
+        for obs_time in observation_dates:
+            time = Time(obs_time)
+            # Propagate the position to the observation time
+            new_coord = self.skycoord.apply_space_motion(new_obstime=time)
+
+            # Store the state at this time
+            state["time"].append(time.iso)
+            state["ra"].append(new_coord.ra)
+            state["dec"].append(new_coord.dec)
+            state["distance"].append(new_coord.distance)
+            state["pm_ra_cosdec"].append(new_coord.pm_ra_cosdec)
+            state["pm_dec"].append(new_coord.pm_dec)
+            state["radial_velocity"].append(new_coord.radial_velocity)
+            state["l"].append(new_coord.galactic.l)
+            state["b"].append(new_coord.galactic.b)
+            state["pm_l_cosb"].append(new_coord.galactic.pm_l_cosb)
+            state["pm_b"].append(new_coord.galactic.pm_b)
+        return state
+
+class BlackHole(AstroObjectTracker):
+    def __init__(
+        self,
+        blackhole={"mass": 1e+15*u.kg, "spin": 0*u.dimensionless_unscaled, "charge": 0*u.dimensionless_unscaled},
+        **kwargs
+    ):
+        '''Class representing a Black Hole, derived from AstroObject.'''
+        super().__init__(**kwargs)
+        
+        self.epoch_state["mass"] = blackhole.get("mass")
+        self.epoch_state["spin"] = blackhole.get("spin")
+        self.epoch_state["charge"] = blackhole.get("charge")
+        self.epoch_state["radius"] = self.calculate_radius(
+            blackhole.get("mass"),
+            blackhole.get("spin"),
+            blackhole.get("charge")
+        )
+
+    def calculate_radius(self, mass, spin, charge):
+        """Calculate various radii of the black hole based on its type."""
+        # ブラックホールの初期パラメータによってbh_typeを決める
+        if spin == 0 * u.dimensionless_unscaled \
+                and charge == 0 * u.dimensionless_unscaled:
+            bh_type = "schwarzschild"
+        else:
+            logger.error('now not using')
+        
+        if bh_type == "schwarzschild":
+            radius = (2 * c.G * mass / c.c**2).to(u.m)
+        elif bh_type == "ergosphere":
+            spin = self.state_history["spin"][-1]
+            radius = (2 * c.G * mass / c.c**2 * (1 + spin)).to(u.m)
+        elif bh_type == "photon_sphere":
+            radius = (3 * c.G * mass / c.c**2).to(u.m)
+        else:
+            raise ValueError(f"Unknown black hole type: {bh_type}")
+        return radius
+            
     def step(self, delta_time, ebins):
         '''Returns a dictionary of ParticleDistribution for the energy range.
         The mass of the BlackHole is decreased by the total energy radiated.'''
@@ -301,71 +230,121 @@ class BlackHole(AstroObject):
         logger.debug(f'Mass of the Blackhole decrfeases by: {delta_mass:1.1E}')
         self.mass -= delta_mass
         return radiated_distributions
+    #internal_processes = {"AccretionProcess":(rate=1*u.M_sun/u.year), "JetFormation":(power=1e38*u.W)}
 
-    def _run_accuration_process(self):
-        for process in self.internal_processes:
-            if isinstance(process, AccretionProcess):
-                accreted_mass = process.evolve(delta_time)
-                self._initial_params['mass'] += accreted_mass  # 質量を増加
-            elif isinstance(process, JetFormation):
-                radiated_energy = process.radiate_energy(delta_time)
-                self._initial_params['mass'] -= radiated_energy / (c.c**2)  # 質量エネルギー保存則に基づいて減少
-            elif isinstance(process, HawkingRadiation):
-                emission_spectrum = process.calculate_emission(self._initial_params['mass'])
-                # 放出されたエネルギーや質量を適用
-
-class DarkMatter(AstroObject):
-    def __init__(self, internal_processes={}, **kwargs):
-        # `AstroObject` の親クラスを呼び出して基本的な初期化を行う
+class DarkMatter(AstroObjectTracker):
+    def __init__(
+        self,
+        darkmater={"velocity_dispersion": 270*u.km/u.s},
+        **kwargs
+    ):
         super().__init__(**kwargs)
-        
-        self.internal_processes = internal_processes
+        self.epoch_state["velocity_dispersion"] = darkmater.get("velocity_dispersion")
 
-    def __str__(self):
-        parent_str = super().__str__()  # Get string from the parent class
-        black_hole_info = (
+class PrimordialBlackHole:
+    hawking_calculated_flag = False
+    _hawking_radiation_instance = None
+    #hawking_calculated_params = {"mass": 1e+18*u.kg, "spin": 0, "charge": 0}
+
+    def __init__(
+        self,
+        final_epoch="2000-01-01 00:00:00",
+        internal_processes={"HawkingRadiation": BlackHawk},
+        loglevel=None,
+        **kwargs
+    ):
+        """Primordial Black Hole, representing an astronomical object, black hole, and dark matter entity."""
+        self.darkmatter = DarkMatter(epoch=final_epoch, loglevel=loglevel, **kwargs)
+        
+        self.blackhole = BlackHole(
+            blackhole={
+                "mass": 0*u.kg,
+                "spin": 0*u.dimensionless_unscaled,
+                "charge": 0*u.dimensionless_unscaled
+            },
+            epoch=final_epoch,
+            loglevel=loglevel,
+            **kwargs
         )
-        internal =f"Internal Processes: {', '.join(str(proc) for proc in self.internal_processes) if self.internal_processes else 'None'}"
-        return f"{parent_str}\nBlack Hole Specifics:\n{black_hole_info}\n{internal}"
 
-class PrimordialBlackHole(BlackHole, DarkMatter):
-    """Primordial Black Hole, which is an astronomical object, black hole, and dark matter entity."""
-    # Class variables for tracking Hawking radiation calculation
-    _hawking_calculated_flag = False
-    _hawking_calculated_params = {"mass": 1e+18*u.kg, "spin": 0, "charge": 0}
-    hawking_radiation = None
+        # parameter fo primordial black hole
+        self.epoch_state = {
+            "date": Time(final_epoch).iso,
+            "ra": self.darkmatter.epoch_state["ra"],
+            "dec": self.darkmatter.epoch_state["dec"],
+            "l": self.darkmatter.epoch_state["l"],
+            "b": self.darkmatter.epoch_state["b"],
+            "distance": self.darkmatter.epoch_state["distance"],
+            "pm_ra_cosdec": self.darkmatter.epoch_state["pm_ra_cosdec"],
+            "pm_dec": self.darkmatter.epoch_state["pm_dec"],
+            "pm_l_cosb": self.darkmatter.epoch_state["pm_l_cosb"],
+            "pm_b": self.darkmatter.epoch_state["pm_b"],
+            "radial_velocity": self.darkmatter.epoch_state["radial_velocity"],
+            "velocity_dispersion": self.darkmatter.epoch_state["velocity_dispersion"],
+            "mass": self.blackhole.epoch_state["mass"],
+            "spin": self.blackhole.epoch_state["spin"],
+            "charge": self.blackhole.epoch_state["charge"]
+        }
+        self.epoch_state["temperature"] = self.calculate_temperature(self.epoch_state["mass"])
+        self.epoch_state["lifetime"] = self.calculate_lifetime(self.epoch_state["temperature"])
 
-    def __init__(self, mass=1e+15*u.kg, spin=0, charge=0, internal_processes={"HawkingRadiation":BlackHawk}, **kwargs):
-        # `BlackHole` と `DarkMatter` の親クラスを呼び出して基本的な初期化を行う
-        BlackHole.__init__(self, mass=mass, spin=spin, charge=charge, internal_processes=internal_processes, **kwargs)
-        DarkMatter.__init__(self, internal_processes=internal_processes, **kwargs)
+        self.hawking = None
+        self.run_hawking_radiation_process(internal_processes["HawkingRadiation"])
+
+    def calculate_temperature(self, mass):
+        '''This method calculates the temperature of the Blackhole.'''
+        # Assuming c from scipy.constants for speed of light
+        import warnings
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore", message="divide by zero encountered in divide", category=RuntimeWarning
+            )
+            temperature_Kelvin = ( (c.hbar * c.c**3) / (8 * np.pi * c.G * mass.to(u.kg) * c.k_B) ).to(u.K)
+        #temperature_GeV = temperature_Kelvin * c.k_B
+        #temperature_GeV = temperature_GeV.to(u.GeV)  # conversion from Kelvin to GeV
+        logger.debug(f'Temperature of the Blackhole: {temperature_Kelvin:1.1E}')
+        return temperature_Kelvin
         
-        #時間を蒸発した時間として使用
-        self.state_history.rename_column("time", "evaporated_time")
+    def calculate_lifetime(self, temperature):
+        '''Ukwatta et al. 2016'''
+        lifetime = (4.8 * 10**2 *pow((c.k_B * temperature.to(u.K)/u.TeV).to(u.Unit(1)), -3)) * u.s
+        logger.debug(f'Lifetime of the Blackhole: {lifetime:1.1E}')
+        return lifetime
+
+    def run_hawking_radiation_process(self, process_method):
+        """Calculate Hawking radiation if not already done."""
+        if not PrimordialBlackHole.hawking_calculated_flag:
+            if issubclass(process_method, BlackHawk):
+                bhawk = process_method(
+                    Path('/Users/omooon/pbh_explorer/blackhawk_v2.3'),
+                    Path('/Users/omooon/pbh_explorer/pbh_explorer/objects/blackhole/blackhawk_params/parameters_PYTHIA_present_epoch.txt')
+                )
+                #bhawk.launch_tot()
+                bhawk.read_results(
+                    particles = ["photon_primary", "photon_secondary"]
+                )
         
-        #履歴に物理パラメータも追加
-        self.state_history["mass"] = self.mass
-        self.state_history["spin"] = self.spin
-        self.state_history["charge"] = self.charge
-        
-        self._run_hawking_radiation_process()
-        
-    def __str__(self):
-        parent_str = super().__str__()  # Get string from the parent class
-        primordial_info = "Primordial Black Hole Specifics: (additional properties can be added here)"
-        internal = f"Internal Processes: {', '.join(str(proc) for proc in self.internal_processes) if self.internal_processes else 'None'}"
-        return f"{parent_str}\n{primordial_info}\n{internal}"
-        
+                # インスタンスを渡す
+                PrimordialBlackHole._hawking_radiation_instance = bhawk
+                self.hawking = bhawk
+            else:
+                #TODO: 他の方法があればここに書く
+                pass
+
+            # 計算後、フラッグをTrueにする
+            PrimordialBlackHole.hawking_calculated_flag = True
+
+        elif self.hawking_calculated_flag:
+            logger.debug("Hawking radiation already calculated, skipping.")
+            self.hawking = PrimordialBlackHole._hawking_radiation_instance
+
     @classmethod
-    def generate_random_pbh(
+    def generate_random_profile_pbh(
         cls,
-        epoch_range=("2000-01-01", "2010-01-01"),
-        position_range={"RA": (0, 360), "Dec": (-90, 90), "distance": (0.01, 1)},
-        velocity_range={"proper_motion_ra": (0, 0), "proper_motion_dec": (0, 0), "radial_velocity": (0, 0)},
-        mass_range=(1e+12, 1e+30),
-        spin_range=(0, 0),
-        charge_range=(0, 0),
-        internal_processes={"HawkingRadiation":BlackHawk}
+        final_epoch_range=("2000-01-01", "2010-01-01"),
+        internal_processes={"HawkingRadiation": BlackHawk},
+        loglevel=None,
+        **kwargs
     ):
         '''
         # Example usage
@@ -375,188 +354,208 @@ class PrimordialBlackHole(BlackHole, DarkMatter):
         # Create AstroObjects with the generated Black Holes as the source
         astro_objects = [AstroObject(source=pb_hole, coordinate_system="spherical", position={"RA": 10 * u.deg, "Dec": 10 * u.deg}) for pb_hole in pb_holes]
         '''
-        astro_obj = AstroObject.generate_random_distribution(
-            epoch_range=epoch_range,
-            position_range=position_range,
-            velocity_range=velocity_range
+        random_tracker = AstroObjectTracker.arrangement_of_random_epoch_distributions(
+            epoch_range=final_epoch_range,
+            loglevel=loglevel,
+            **kwargs
         )
-        epoch=astro_obj.epoch.iso
-        position={"RA": astro_obj.ra, "Dec": astro_obj.dec, "distance": astro_obj.distance}
-        velocity={"proper_motion_ra":astro_obj.proper_motion_ra, "proper_motion_dec":astro_obj.proper_motion_dec, "radial_velocity": astro_obj.radial_velocity}
+
+        position = {
+            "ra": random_tracker.epoch_state["ra"],
+            "dec":  random_tracker.epoch_state["dec"],
+            "distance": random_tracker.epoch_state["distance"],
+        }
         
-        # ブラックホールの特異なパラメータ（質量、スピン、電荷）をランダムに生成
-        log_mass = np.random.uniform(np.log10(1e+12), np.log10(1e+30))  # 対数値を生成
-        mass = 10 ** log_mass * u.kg  # 線形スケールに戻す
-        spin = np.random.uniform(spin_range[0], spin_range[1])
-        charge = np.random.uniform(charge_range[0], charge_range[1])
+        velocity = {
+            "pm_ra_cosdec": random_tracker.epoch_state["pm_ra_cosdec"],
+            "pm_dec": random_tracker.epoch_state["pm_dec"],
+            "radial_velocity": random_tracker.epoch_state["radial_velocity"]
+        }
+            
+        return cls(
+            final_epoch=random_tracker.epoch_state["date"],
+            internal_processes=internal_processes,
+            position=position,
+            velocity=velocity,
+            loglevel=loglevel
+        )
+
+    def track_states(self, observation_dates):
+        TIME_OF_EVAPORATION = Time(self.epoch_state["date"])
+        time_to_evaporation = [max((TIME_OF_EVAPORATION - Time(obs_time)).sec, 0) for obs_time in observation_dates] * u.s
         
-        # ダークマターもあれば
+        mass_to_evaporation = np.interp(
+            time_to_evaporation,
+            np.flip(self.hawking.time_to_evaporation),
+            np.flip(self.hawking.mass_to_evaporation),
+            left=0
+        )
+        spin_to_evaporation = np.interp(
+            time_to_evaporation,
+            np.flip(self.hawking.time_to_evaporation),
+            np.flip(self.hawking.spin_to_evaporation),
+            left=0
+        )
+        charge_to_evaporation = np.interp(
+            time_to_evaporation,
+            np.flip(self.hawking.time_to_evaporation),
+            np.flip(self.hawking.charge_to_evaporation),
+            left=0
+        )
+        
+        temp_to_evaporation = u.Quantity([self.calculate_temperature(i) for i in mass_to_evaporation])
+        
+        dm_states = self.darkmatter.track_states(observation_dates)
+        
+        # parameter fo primordial black hole
+        obs_states = {
+            "date": Time(observation_dates).iso,
+            "ra": u.Quantity(dm_states["ra"]),
+            "dec": u.Quantity(dm_states["dec"]),
+            "l": u.Quantity(dm_states["l"]),
+            "b": u.Quantity(dm_states["b"]),
+            "distance": u.Quantity(dm_states["distance"]),
+            "pm_ra_cosdec": u.Quantity(dm_states["pm_ra_cosdec"]),
+            "pm_dec": u.Quantity(dm_states["pm_dec"]),
+            "pm_l_cosb": u.Quantity(dm_states["pm_l_cosb"]),
+            "pm_b": u.Quantity(dm_states["pm_b"]),
+            "radial_velocity": u.Quantity(dm_states["radial_velocity"]),
+            #"velocity_dispersion": u.Quantity(dm_states["velocity_dispersion"]),
+            "mass": mass_to_evaporation,
+            "spin": spin_to_evaporation,
+            "charge": charge_to_evaporation,
+            "temperature": temp_to_evaporation,
+            "lifetime": time_to_evaporation
+        }
+        # Logging the observation states with a detailed and formatted output
+        logger.debug("Observation States:\n")
+        for key, value in obs_states.items():
+            logger.debug(f"{key.capitalize()}: {value}")
+        return obs_states
 
-        return cls(mass=mass, spin=spin, charge=charge, internal_processes=internal_processes, epoch=epoch, position=position, velocity=velocity)
-
-    def calculate_lifetime(self):
-        '''Ukwatta et al. 2016'''
-        self.lifetime = []
-        lifetime = (4.8 * 10**2 *pow((c.k_B*self.temperature()/u.TeV).to(u.Unit(1)), -3)) * u.s
-        logger.debug(f'Lifetime of the Blackhole: {lifetime:1.1E}')
-        return lifetime
-
-    def caluculate_temperature(self, MASS):
-        '''This method calculates the temperature of the Blackhole.'''
-        # Assuming c from scipy.constants for speed of light
-        temp = []
-        for mass in MASS:
-            temp.append(( c.hbar * c.c**3 / (8 * np.pi * c.G * mass.to(u.kg) * c.k_B) ).to(u.K))
-            logger.debug(f'Temperature of the Blackhole: {temp:1.1E}')
-        return temp
-    
-    def calculate_entropy(self):
-        pass
-
-    def _run_hawking_radiation_process(self):
-        """Calculate Hawking radiation if not already done."""
-        if not PrimordialBlackHole._hawking_calculated_flag:
-
-            if "HawkingRadiation" in self.internal_processes.keys():
-                # HawkingRadiationキーが含まれている場合
-                process_method = self.internal_processes["HawkingRadiation"]
-                
-                if issubclass(process_method, BlackHawk):
-                    bhawk = process_method(Path('/Users/omooon/pbh_explorer/blackhawk_v2.3'), Path('/Users/omooon/pbh_explorer/pbh_explorer/objects/blackhole/blackhawk_params/parameters_PYTHIA_present_epoch.txt'))
-                    #bhawk.launch_tot()
-                    bhawk.read_results(particles = ['photon_primary', 'photon_secondary'])
-                    # 実行したインスタンスを渡す
-                    PrimordialBlackHole.hawking_radiation = bhawk
-                else:
-                    #他のモデルがあれば
-                    pass
-                
-                # 計算後、フラッグをTrueにする
-                PrimordialBlackHole._hawking_calculated_flag = True
-                        
-            else:
-                # HawkingRadiationキーが含まれていない場合
-                print("HawkingRadiation is not present in internal_processes.")
-        else:
-            print("Hawking radiation already calculated, skipping.")
-
-    def get_time_window_average_models(
+    def get_observation_averaged_spectral_models(
         self,
-        distance=0.1*u.pc,
-        tstart="2000-01-01",
-        tstop="2010-01-01",
-        particle_list=["photon"],
-        decay_functions_list=[{}],
-        rest_mass_list=[0],
-        charge_list=[0],
-        flavour_list=[None],
-        spin_list=[1],
-        ndof_list=[2]
+        observation_dates,
+        distance=1*u.pc,
+        particle="photon",
+        frame="galactic"
     ):
-        """
-        指定された initial_time から initial_time + time_window までの
-        データ範囲のスペクトルリストを作成する
+        obs_states = self.track_states(observation_dates)
 
-        Parameters:
-        initial_lifetime : Quantity array
-            開始する時間（観測の開始時刻、単位付き）
-        time_window : Quantity
-            観測する時間間隔（単位付き）
+        total_spectral_models = []
+        for idx in range(len(obs_states["date"]) - 1):
+            diff_primary_spectra_table = self.hawking.diff_spectra[f"{particle}_primary"]
+            diff_secondary_spectra_table = self.hawking.diff_spectra[f"{particle}_secondary"]
+            
+            primary_energy_colnames = diff_primary_spectra_table.colnames[1:]
+            secondary_energy_colnames = diff_secondary_spectra_table.colnames[1:]
+            
+            # エネルギーアレイの取得
+            primary_energy_array = u.Quantity([u.Quantity(e) for e in primary_energy_colnames])
+            secondary_energy_array = u.Quantity([u.Quantity(e) for e in secondary_energy_colnames])
+            
+            # 微分スペクトルアレイの取得
+            diff_primary_spectra_array = u.Quantity([diff_primary_spectra_table[colname] for colname in primary_energy_colnames])
+            diff_secondary_spectra_array = u.Quantity([diff_secondary_spectra_table[colname] for colname in secondary_energy_colnames])
+            
+            # 積分スペクトルアレイの取得、全てを昇順(ascending order)にしてから解析
+            flip_diff_primary_spectra_array = diff_primary_spectra_array[:, ::-1]
+            flip_diff_secondary_spectra_array = diff_secondary_spectra_array[:, ::-1]
+            flip_time_to_evaporation = np.flip(self.hawking.time_to_evaporation)
+            flip_delta_time = np.flip(self.hawking.delta_time)
+            
+            # Extract time data
+            lifetime_at_obs_start = obs_states["lifetime"][idx]
+            lifetime_at_obs_stop = obs_states["lifetime"][idx+1]
+            flip_idx_min = np.searchsorted(flip_time_to_evaporation, lifetime_at_obs_stop, side="left")
+            flip_idx_max = np.searchsorted(flip_time_to_evaporation, lifetime_at_obs_start, side="left")
 
-        Returns:
-        filtered_spectra : Quantity array
-            指定された範囲のデータ
-        """
-        pbh_initial_lifetime = Time(self.state_history["evaporated_time"][0]) - Time(tstart)
+            # Integrate the differential spectra over time
+            if flip_idx_min < flip_idx_max:
+                integ_time_array = u.Quantity([
+                    (flip_time_to_evaporation[flip_idx_min] - lifetime_at_obs_stop).to(u.s),
+                    *(flip_delta_time[flip_idx_min+1:flip_idx_max]).to(u.s),
+                    (lifetime_at_obs_start - flip_time_to_evaporation[flip_idx_max-1]).to(u.s)
+                ])
+                integrated_primary_spectrum_array = np.sum(
+                    flip_diff_primary_spectra_array[:, flip_idx_min:flip_idx_max+1] * integ_time_array[np.newaxis, :],
+                    axis=1
+                )
+                integrated_secondary_spectrum_array = np.sum(
+                    flip_diff_secondary_spectra_array[:, flip_idx_min:flip_idx_max+1] * integ_time_array[np.newaxis, :],
+                    axis=1
+                )
+            elif flip_idx_min == flip_idx_max:
+                integ_time = lifetime_at_obs_start - lifetime_at_obs_stop
+                integrated_primary_spectrum_array = flip_diff_primary_spectra_array[:,flip_idx_min] * integ_time
+                integrated_secondary_spectrum_array = flip_diff_secondary_spectra_array[:,flip_idx_min] * integ_time
+            
+            TIME_OF_OBS_START = Time(obs_states["date"][idx])
+            TIME_OF_OBS_STOP = Time(obs_states["date"][idx+1])
+            obs_duration = (TIME_OF_OBS_STOP - TIME_OF_OBS_START).sec * u.s
+            distance_factor = 4 * np.pi * distance.to(u.cm)**2
         
-        if Time(tstart)+pbh_initial_lifetime < Time(tstart):
-            pass
-        else:
-            str_idx = self.hawking_radiation._dts['rt'][
-                        self.hawking_radiation._dts['rt'] >= pbh_initial_lifetime
-                    ].argmin()
-            
-            if self.hawking_radiation._dts['rt'][str_idx] == pbh_initial_lifetime:
-                time_factor = 0
-            else:
-                excess_time = self.hawking_radiation._dts['rt'][str_idx] - pbh_initial_lifetime
-                time_step = self.hawking_radiation._dts['rt'][str_idx] - self.hawking_radiation._dts['rt'][str_idx+1]
-                time_factor = (time_step - excess_time) / time_step
-    
-        # particleごとのスペクトルモデルの作成
-        for i, particle in enumerate(particle_list):
-            if "photon" not in particle.lower():
-                logger.error("Only photons can be modeled now! %s is not a photon.", particle)
-        
-            # primary成分とsecondary成分ごとにエネルギーとフラックスを抽出
-            component_energy_array = {}
-            component_spectra_array = {}
-            for component in ["primary","secondary"]:
-                spectra_table = \
-                    self.hawking_radiation.integral_radiation_spectra[f"{particle}_{component}"][str_idx:]
-                
-                energy_bins = np.array([
-                    u.Quantity(colname).to(u.GeV).value for colname in spectra_table.colnames[1:]
-                ]) * u.GeV
-                component_energy_array[component] = energy_bins
-                
-                spectra_list = []
-                for colname in spectra_table.colnames[1:]:
-                    #TODO:合ってるか確認
-                    # Convert from 1/(GeV cm3) to count number/GeV
-                    # 最初の行（str_idx）の値にはtime_factorをかける
-                    col_zeroed = (spectra_table[colname][0] * time_factor * u.cm**3).to(u.GeV**(-1)).value
-                    # 最初の行を除外して合計
-                    col_after_zeroed = np.sum((spectra_table[colname][1:] * u.cm**3).to(u.GeV**(-1)).value)
-                    
-                    spectra_list.append(
-                        (col_zeroed + col_after_zeroed)
-                    )
-                component_spectra_array[component] = np.array(spectra_list).T * u.GeV**(-1)
-
-            
-            # creationg short-term signal skymodel for PBH
-            time_interval = Time(tstop) - Time(tstart)
-            distance_factor = 4 * np.pi * (distance.to(u.cm))**2
-            signal_skymodels = []
-            
             primary_spectral_model = TemplateSpectralModel(
-                energy = component_energy_array["primary"].to(u.MeV),
-                values = component_spectra_array["primary"].to(1/u.MeV) / distance_factor / (time_interval.sec * u.s)
+                energy = primary_energy_array,
+                values = integrated_primary_spectrum_array / distance_factor / obs_duration * u.cm**3
             )
             secondary_spectral_model = TemplateSpectralModel(
-                energy = component_energy_array["secondary"].to(u.MeV),
-                values = component_spectra_array["secondary"].to(1/u.MeV) / distance_factor / (time_interval.sec * u.s)
+                energy = secondary_energy_array,
+                values = integrated_secondary_spectrum_array / distance_factor / obs_duration * u.cm**3
             )
-            
             total_spectral_model = CompoundSpectralModel(
                 primary_spectral_model,
                 secondary_spectral_model,
                 operator=lambda x, y: x + y
             )
-            spatial_model = PointSpatialModel(
-                lon_0=self.ra,
-                lat_0=self.dec,
-                frame="icrs"
-            )
-            signal_skymodels.append(
-                                        SkyModel(
-                                                    spectral_model=total_spectral_model,
-                                                    spatial_model=spatial_model
-                                                    #name=None
-                                                )
-                                    )
-        return Models(signal_skymodels)
+            total_spectral_models.append(total_spectral_model)
+        return total_spectral_models, obs_states
 
-    def _create_evolution_models(
+    def get_observation_averaged_skymodels(
         self,
-        particle_list=["photon"],
-        decay_functions_list=[{}],
-        rest_mass_list=[0],
-        charge_list=[0],
-        flavour_list=[None],
-        spin_list=[1],
-        ndof_list=[2]
+        observation_dates,
+        distance=1*u.pc,
+        particle="photon",
+        frame="galactic"
+    ):
+        # Create spectral models
+        obs_averaged_spectral_models, obs_states = self.get_observation_averaged_spectral_models(
+            observation_dates,
+            distance=distance,
+            particle=particle,
+            frame=frame
+        )
+        
+        # Create skymodels
+        obs_averaged_skymodels = []
+        for spectral_model in obs_averaged_spectral_models:
+            # Create spatial models
+            if frame == "galactic":
+                spatial_model = PointSpatialModel(
+                    lon_0=self.epoch_state["l"],
+                    lat_0=self.epoch_state["b"],
+                    frame="galactic"
+                )
+            elif frame == "icrs":
+                spatial_model = PointSpatialModel(
+                    lon_0=self.epoch_state["ra"],
+                    lat_0=self.epoch_state["dec"],
+                    frame="icrs"
+                )
+            
+            obs_averaged_skymodels.append(
+                SkyModel(
+                    spectral_model=spectral_model,
+                    spatial_model=spatial_model
+                )
+            )
+        return obs_averaged_skymodels, obs_states
+
+    def get_evolution_skymodels(
+        self,
+        distance=1*u.pc,
+        particle="photon",
+        frame="galactic",
     ):
         """
         Generate SkyModel objects from PBH data, considering observation start time.
@@ -564,272 +563,144 @@ class PrimordialBlackHole(BlackHole, DarkMatter):
         Parameters:
         - observation_start_time (str): ISO format string representing the start of observation.
         """
-        distance_factor = 4 * np.pi * (self.distance.to(u.cm))**2
-
-        for i, particle in enumerate(particle_list):
-            if "photon" not in particle.lower():
-                logger.error("Only photons can be modeled now! %s is not a photon.", particle)
+        # primary成分とsecondary成分のエネルギーとフラックスを抽出
+        component_energy_array = {}
+        component_spectra_array = {}
+        for component in ["primary","secondary"]:
+            spectra_table = self.hawking.integ_spectra[f"{particle}_{component}"]
+            
+            energy_bins = np.array([
+                u.Quantity(colname).to(u.GeV).value for colname in spectra_table.colnames[1:]
+            ]) * u.GeV
+            component_energy_array[component] = energy_bins
+            
+            spectra_list = []
+            for colname in spectra_table.colnames[1:]:
+                # Convert from 1/(GeV cm3) to count number/GeV
+                #TODO:合ってるか確認
+                spectra_list.append(
+                    (spectra_table[colname] * u.cm**3).to(u.GeV**(-1)).value
+                )
+            component_spectra_array[component] = np.array(spectra_list).T * u.GeV**(-1)
         
-            # primary成分とsecondary成分ごとにエネルギーとフラックスを抽出
-            component_energy_array = {}
-            component_spectra_array = {}
-            for component in ["primary","secondary"]:
-                spectra_table = self.hawking_radiation.integral_radiation_spectra[f"{particle}_{component}"]
-                
-                energy_bins = np.array([
-                    u.Quantity(colname).to(u.GeV).value for colname in spectra_table.colnames[1:]
-                ]) * u.GeV
-                
-                spectra_list = []
-                for colname in spectra_table.colnames[1:]:
-                    # Convert from 1/(GeV cm3) to count number/GeV
-                    #TODO:合ってるか確認
-                    spectra_list.append(
-                        (spectra_table[colname] * u.cm**3).to(u.GeV**(-1)).value
-                    )
+        # creationg short-term signal skymodel for PBH
+        evol_skymodels = []
+        for idx, (primary_spectrum, secondary_spectrum) in \
+            enumerate(zip(component_spectra_array["primary"], component_spectra_array["secondary"])):
             
-                component_spectra_array[component] = np.array(spectra_list).T * u.GeV**(-1)
+            distance_factor = 4 * np.pi * distance.to(u.cm)**-2
+            primary_spectral_model = TemplateSpectralModel(
+                energy = component_energy_array["primary"].to(u.GeV),
+                values = primary_spectrum.to(1/u.GeV) * distance_factor * self.hawking.delta_time[idx]**-1
+            )
+            secondary_spectral_model = TemplateSpectralModel(
+                energy = component_energy_array["secondary"].to(u.GeV),
+                values = secondary_spectrum.to(1/u.GeV) * distance_factor * self.hawking.delta_time[idx]**-1
+            )
+            total_spectral_model = CompoundSpectralModel(
+                primary_spectral_model,
+                secondary_spectral_model,
+                operator=lambda x, y: x + y
+            )
             
-            # creationg short-term signal skymodel for PBH
-            signal_skymodels = []
-            for (primary_spectrum, secondary_spectrum) in zip(component_spectra_array["primary"],
-                                                              component_spectra_array["secondary"]):
-                primary_spectral_model = TemplateSpectralModel(
-                    energy = energy_bins.to(u.MeV),
-                    values = primary_spectrum.to(1/u.MeV) / distance_factor / u.s
-                )
-                secondary_spectral_model = TemplateSpectralModel(
-                    energy = energy_bins.to(u.MeV),
-                    values = secondary_spectrum.to(1/u.MeV) / distance_factor / u.s
-                )
-                
-                total_spectral_model = CompoundSpectralModel(
-                    primary_spectral_model,
-                    secondary_spectral_model,
-                    operator=lambda x, y: x + y
-                )
+            if frame == "galactic":
                 spatial_model = PointSpatialModel(
-                    lon_0=self.ra,
-                    lat_0=self.dec,
+                    lon_0=self.epoch_state["l"],
+                    lat_0=self.epoch_state["b"],
+                    frame="galactic"
+                )
+            elif frame == "icrs":
+                spatial_model = PointSpatialModel(
+                    lon_0=self.epoch_state["ra"],
+                    lat_0=self.epoch_state["dec"],
                     frame="icrs"
                 )
-                signal_skymodels.append(
-                                            SkyModel(
-                                                        spectral_model=total_spectral_model,
-                                                        spatial_model=spatial_model
-                                                        #name=None
-                                                    )
-                                        )
-        return Models(signal_skymodels)
-        
-    def plot_particle_flux(
-        self,
-        particle_list=["photon"],
-        decay_functions_list=[{}],
-        rest_mass_list=[0],
-        charge_list=[0],
-        flavour_list=[None],
-        spin_list=[1],
-        ndof_list=[2]
-    ):
-        evolution_models = self._create_evolution_models(
-            particle_list=particle_list,
-            decay_functions_list=decay_functions_list,
-            rest_mass_list=rest_mass_list,
-            charge_list=charge_list,
-            flavour_list=flavour_list,
-            spin_list=spin_list,
-            ndof_list=ndof_list
-        )
-
-        fig = plt.figure(figsize=(12, 8))
-        #self._bhawk.plot_evolution(fig_evol=fig)
             
-        # axis for time to evaporation spectrum
-        ax_spec = plt.subplot2grid(
-            (6, 2), (2, 0),
-            rowspan=3, colspan=2,
-            fig=fig
-        )
-        
-        # slider-axis for time to evaporation
-        ax_evaporation = fig.add_axes(
-            [0.3, 0.08, 0.4, 0.02],
-            facecolor='lightsteelblue'
-        )
-        
-        evaporation_slider = Slider(
-            ax_evaporation,
-            'log10(Time to evaporation [s])',
-            self._time_to_evaporation_log[-1],
-            self._time_to_evaporation_log[0],
-            valstep=np.flip(self._time_to_evaporation_log),
-            valinit=self._time_to_evaporation[0],
-            initcolor='hotpink'
-        )
-
-        # time to evaporation colorbar
-        cmap_time = plt.cm.get_cmap('rainbow')
-        norm_time = mpl.colors.LogNorm(
-            vmax=10**self._time_to_evaporation_to_zero_log[0],
-            vmin=10**self._time_to_evaporation_to_zero_log[-1]
-            )
-        plt.colorbar(
-            mpl.cm.ScalarMappable(norm=norm_time, cmap=cmap_time),
-            ax=ax_spec,
-            label='Time to evaporation [s]'
-            )
-            
-        # reset button
-        ax_flux_reset = fig.add_axes([0.8, 0.08, 0.1, 0.02])
-        button_flux_reset = Button(
-            ax_flux_reset,
-            'Reset',
-            color='g', hovercolor='r'
-            )
-
-        def show_spectrum(val):
-            '''Draws primary/secondary photon spectra of the blackhole (for 4pi sr).'''
-            
-            # 現在のスライダーに対応するインデックスの情報をそれぞれ取得
-            ival = np.absolute(self._time_to_evaporation_log - val).argmin()
-            ph_radiation1 = self._radiation_profiles['photon_primary'].spectra[ival]
-            ph_radiation2 = self._radiation_profiles['photon_secondary'].spectra[ival]
-            dt = self._delta_times[ival]
-            t_to_evap = self._time_to_evaporation[ival]
-            
-            # スペクトルのプロット
-            signal_models = self.create_short_term_signal_skymodels(ph_radiation1, ph_radiation2, dt, t_to_evap)
-            signal_models.spectral_model.model1.plot(
-                ax=ax_spec,
-                energy_bounds=(1e-6, 100) * u.TeV,
-                sed_type='dnde',
-                ls='-', lw=1, marker='o', ms=2, alpha=1.0,
-                color=cmap_time(norm_time(t_to_evap)),
-                label='photon primary at {0:1.2E} s'.format(t_to_evap),
+            evol_skymodels.append(
+                SkyModel(
+                    spectral_model=total_spectral_model,
+                    spatial_model=spatial_model,
+                    name=f"lifetime{self.hawking.time_to_evaporation[idx].to(u.s).value}s_distance{distance.to(u.pc).value}pc"
                 )
-            signal_models.spectral_model.model2.plot(
-                ax=ax_spec,
-                energy_bounds=(1e-6, 100) * u.TeV,
-                sed_type='dnde',
-                ls='-', lw=1, marker=',', ms=0, alpha=0.5,
-                color=cmap_time(norm_time(t_to_evap)),
-                label='photon_secondary at {0:1.2E} s'.format(t_to_evap),
-                )
-            # Add vertical dashed lines
-            energy_axis = self._config.getEnergyAxis()
-            emin = energy_axis.bounds.to(u.TeV).min().value
-            emax = energy_axis.bounds.to(u.TeV).max().value
-            ax_spec.axvline(x=emin,
-                            color='gray',
-                            linestyle='--',
-                            )
-            ax_spec.axvline(x=emax,
-                            color='gray',
-                            linestyle='--'
-                            )
-            ax_spec.legend()
-            evaporation_slider.poly.set(facecolor=cmap_time(norm_time(t_to_evap)))
-            fig.canvas.draw_idle()
-            
-        def reset_flux(event):
-            evaporation_slider.reset()
-            ax_spec.clear()
-
-        evaporation_slider.on_changed(show_spectrum)
-        button_flux_reset.on_clicked(reset_flux)
-        
-        plt.tight_layout()
-        plt.show()
+            )
+        return evol_skymodels
 
 
-        
+
 
 
 
 '''
-        for i, particle in enumerate(particle_list):
-            if "photon" not in particle.lower():
-                logger.error("Only photons can be modeled now! %s is not a photon.", particle)
+for idx in range(len(obs_states["date"]) - 1):
+# Extract time and spectrum data
+lifetime_at_obs_start = obs_states["lifetime"][idx]
+lifetime_at_obs_stop = obs_states["lifetime"][idx+1]
+
+# Create spectral models
+component_spectral_models = []
+for component in ["primary", "secondary"]:
+    diff_spectra_table = self.hawking.diff_spectra[f"{particle}_{component}"]
+    energy_colnames = diff_spectra_table.colnames[1:]
+    
+    energy_array = u.Quantity(
+        [u.Quantity(e) for e in energy_colnames]
+    )
+    diff_spectra_array = np.array(
+        [diff_spectra_table[colname].value for colname in energy_colnames]
+    )
+    
+    # 全てを昇順(ascending order)にしてから解析
+    flip_diff_spectra_array = np.array(
+        [diff_spectra_table[::-1][colname].value for colname in energy_colnames]
+    )
+    flip_time_to_evaporation = np.flip(self.hawking.time_to_evaporation)
+    flip_delta_time = np.flip(self.hawking.delta_time)
+
+    flip_idx_min = np.searchsorted(flip_time_to_evaporation, lifetime_at_obs_stop, side="left")
+    flip_idx_max = np.searchsorted(flip_time_to_evaporation, lifetime_at_obs_start, side="left")
+    
+    # Integrate the differential spectra over time
+    accumulated_time = 0 * u.s
+    #if flip_idx_min < flip_idx_max:
+    #   integ_time = np.diff(np.concatenate(([lifetime_at_obs_stop], flip_time_to_evaporation[flip_idx_min:flip_idx_max], [lifetime_at_obs_start])))
+    #    integrated_spectrum_array = np.sum(flip_diff_spectra_array[:, flip_idx_min:flip_idx_max] * integ_time, axis=1)
+    if flip_idx_min < flip_idx_max:
+        for flip_idx in range(flip_idx_min, flip_idx_max+1):
+            if flip_idx == flip_idx_min:
+                integ_time = (flip_time_to_evaporation[flip_idx] - lifetime_at_obs_stop).to(u.s)
+                integrated_spectrum_array = flip_diff_spectra_array[:,flip_idx] * integ_time
+                
+            elif flip_idx_min < flip_idx < flip_idx_max:
+                integ_time = (flip_delta_time[flip_idx]).to(u.s)
+                integrated_spectrum_array += flip_diff_spectra_array[:,flip_idx] * integ_time
+                
+            elif flip_idx == flip_idx_max:
+                integ_time = (lifetime_at_obs_start - flip_time_to_evaporation[flip_idx-1]).to(u.s)
+                integrated_spectrum_array += flip_diff_spectra_array[:,flip_idx] * integ_time
             
-            # 引数で与えられたparticleの名前を元に、Particleインスタンスの作成
-            PARTICLE = Particle.Particle(
-                particle, decay_functions_list[i], rest_mass_list[i], charge_list[i], flavour_list[i], spin_list[i], ndof_list[i]
-            )
-            
-            # primary成分とsecondary成分をまとめる
-            radiations = {}
-            for component in ["primary","secondary"]:
-                spectra_table = self.hawking_radiation.integral_radiation_spectra[f"{particle}_{component}"]
-                
-                energy_bins = np.array([
-                    u.Quantity(colname).to(u.GeV).value for colname in spectra_table.colnames[1:]
-                ]) * u.GeV
-                
-                spectra_list = []
-                for colname in spectra_table.colnames[1:]:
-                    # Convert from 1/(GeV cm3) to count number/GeV
-                    #TODO:合ってるか確認
-                    spectra_list.append(
-                        (spectra_table[colname] * u.cm**3).to(u.GeV**(-1)).value
-                    )
-                spectra_qarray = np.array(spectra_list).T * u.GeV**(-1)
-        
-                # さっきのリストと何が違う？
-                spectra_list = []
-                for irow in reversed(range(len(spectra_table))):
-                    spectrum_values = spectra_qarray[irow]
-                    particle_graph_set = (spectrum_values, energy_bins)
-                    spectra_list.append(
-                        Particle.ParticleDistribution(
-                            particle=PARTICLE,
-                            position=(self.ra, self.dec, self.distance),
-                            spectrum=particle_graph_set,  # particle_hist
-                            name=f"{particle}_{component}",
-                            spec_hist=False,
-                        )
-                    )
-                radiations[f"{particle}_{component}"] = \
-                    Particle.ParticleDistributionProfile(spectra_list, energy_bins)
-        
-        
-            distance_factor = 4 * np.pi * (self.distance.to(u.cm))**2
-            signal_skymodels = []
-            for irow, (ph_radiation1, ph_radiation2) in \
-                enumerate(zip(radiations[f"{particle}_primary"].spectra, radiations[f"{particle}_secondary"].spectra)):
-                """ph_radiation1 and ph_radiation2 must be a ParticleDistribution,
-                which has attributes of .spectrum and .position."""
-                
-                primary_flux = ph_radiation1.spectrum[0].to(1/u.MeV) / distance_factor / u.s
-                primary_spectral_model = TemplateSpectralModel(
-                    energy = ph_radiation1.spectrum[1].to(u.MeV),
-                    values = primary_flux
-                )
-                
-                secondary_flux = ph_radiation2.spectrum[0].to(1/u.MeV) / distance_factor / u.s
-                secondary_spectral_model = TemplateSpectralModel(
-                    energy = ph_radiation2.spectrum[1].to(u.MeV),
-                    values = secondary_flux
-                )
-                
-                total_spectral_model = CompoundSpectralModel(
-                    primary_spectral_model,
-                    secondary_spectral_model,
-                    operator=lambda x, y: x + y
-                )
-                spatial_model = PointSpatialModel(
-                    lon_0=self.ra,
-                    lat_0=self.dec,
-                    frame="icrs"
-                )
-                
-                # creationg short-term signal skymodel for PBH
-                signal_skymodels.append(
-                                            SkyModel(
-                                                        spectral_model=total_spectral_model,
-                                                        spatial_model=spatial_model
-                                                        #name=None
-                                                    )
-                                        )
-        return Models(signal_skymodels)
+            accumulated_time += integ_time
+    elif flip_idx_min == flip_idx_max:
+        integ_time = lifetime_at_obs_start - lifetime_at_obs_stop
+        integrated_spectrum_array = flip_diff_spectra_array[:,flip_idx_min] * integ_time
+        accumulated_time += integ_time
+    integrated_spectrum = integrated_spectrum_array * diff_spectra_table[energy_colnames[0]].unit * u.cm**3
+    
+    TIME_OF_OBS_START = Time(obs_states["date"][idx])
+    TIME_OF_OBS_STOP = Time(obs_states["date"][idx+1])
+    obs_duration = (TIME_OF_OBS_STOP - TIME_OF_OBS_START).sec * u.s
+    logger.debug(f"Accumulated Time: {accumulated_time}, Observation Duration: {obs_duration}")
+
+    distance_factor = 4 * np.pi * distance.to(u.cm)**2
+    
+    spectral_model = TemplateSpectralModel(
+        energy = energy_array,
+        values = integrated_spectrum / distance_factor / obs_duration
+    )
+    component_spectral_models.append(spectral_model)
+    
+from functools import reduce
+total_spectral_model = reduce(
+    lambda x, y: CompoundSpectralModel(x, y, operator=lambda a, b: a + b),
+    component_spectral_models
+)
 '''
