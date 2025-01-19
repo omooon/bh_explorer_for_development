@@ -1,1 +1,0 @@
-/Users/omooon/miniconda3/envs/fermipy/share/fermitools/refdata/fermi/galdiffuse/iso_P8R3_SOURCE_V3_v1.txt
